@@ -271,6 +271,47 @@ export struct SelectedTransitionData {
     into: string,
 }
 
+/// A category button of the tagging pane.
+export struct TagButtonData {
+    name: string,
+    colour: color,
+    /// The key that presses it, "1" to "9", or empty.
+    key: string,
+    /// How many registers it has on this timeline.
+    count: int,
+    /// Its reach before and after the press, in seconds.
+    lead: float,
+    lag: float,
+}
+
+/// A descriptor of the tagging pane, lit when the register in hand has it.
+export struct TagChipData {
+    name: string,
+    on: bool,
+}
+
+/// A register in the tagging pane's list.
+export struct TagRowData {
+    id: string,
+    /// Where it starts, as minutes and seconds.
+    time: string,
+    name: string,
+    colour: color,
+    /// Its descriptors, joined.
+    descriptors: string,
+    rating: int,
+    /// It is the register in hand.
+    current: bool,
+}
+
+/// A play on the ruler: where it runs, what it is called, its tag's colour.
+export struct PlayMarkData {
+    start: float,
+    end: float,
+    label: string,
+    colour: color,
+}
+
 export struct SelectedClipData {
     present: bool,
     /// how many clips the panel writes to: one, or every selected title
@@ -335,6 +376,50 @@ export struct SelectedClipData {
     cutout-progress: float,
     cutout-fetching: bool,
     cutout-empty: bool,
+
+    // football: whether the footage has been analysed; the job at work,
+    // -1 when none, else how far along, and whether it is reading a
+    // silhouette rather than finding players; whether a press on the
+    // monitor picks a player; the track picked, -1 for none, and whether
+    // it is the ball; which marks it wears here; how many marks the clip
+    // carries in all
+    football-analysed: bool,
+    football-progress: float,
+    football-silhouettes: bool,
+    football-picking: bool,
+    football-chosen: int,
+    football-ball: bool,
+    football-shade: bool,
+    football-spotlight: bool,
+    football-ring: bool,
+    football-erase: bool,
+    football-isolate: bool,
+    football-arrow: bool,
+    football-frame: bool,
+    // the chosen player's marks here: how many, and their knobs - size,
+    // line, height, strength - as the first of them has them
+    football-marks-here: int,
+    football-size: float,
+    football-thickness: float,
+    football-squash: float,
+    football-strength: float,
+    football-marks: int,
+    // telestration: the tool out (-1 none, 0 line, 1 arrow, 2 curve,
+    // 3 zone, 4 link), its style, its colour as a row of the palette, how
+    // many drawings the clip carries, and how many points the zone or link
+    // being clicked out has
+    draw-tool: int,
+    draw-dashed: bool,
+    draw-thickness: float,
+    draw-hold: float,
+    draw-reveal: float,
+    draw-bend: float,
+    draw-freeze: float,
+    draw-colour: int,
+    drawings: int,
+    draw-points: int,
+    /// the chosen player's marks' colour, as a row of the palette, -1 for none
+    football-colour: int,
 
     // Enhance writing this clip's enhanced copy: -1 when it is not, else
     // how far along, and whether that is the model downloading rather

@@ -456,6 +456,12 @@ pub enum Gesture {
     /// A brush on the stage: the stroke so far, in source fractions for
     /// the command it becomes and in stage fractions for the line drawn
     /// under the pointer meanwhile.
+    /// A line, an arrow or a curve being dragged out on the stage.
+    Draw {
+        clip: String,
+        anchors: Vec<model::Anchor>,
+        screen: Vec<(f32, f32)>,
+    },
     Paint {
         clip: String,
         tool: model::BrushTool,
@@ -465,6 +471,33 @@ pub enum Gesture {
         points: Vec<[f64; 2]>,
         screen: Vec<(f32, f32)>,
     },
+}
+
+/// How the drawing tool draws: the style of the next drawing.
+#[derive(Clone, Debug)]
+pub struct DrawStyle {
+    pub dashed: bool,
+    pub colour: [u8; 3],
+    pub thickness: f64,
+    pub hold: f64,
+    pub reveal: f64,
+    pub bend: f64,
+    /// How long Freeze and draw holds the frame, in seconds.
+    pub freeze: f64,
+}
+
+impl Default for DrawStyle {
+    fn default() -> Self {
+        DrawStyle {
+            dashed: false,
+            colour: [0xff, 0xd4, 0x00],
+            thickness: 1.0,
+            hold: 4.0,
+            reveal: 0.6,
+            bend: 0.25,
+            freeze: 5.0,
+        }
+    }
 }
 
 /// The custom cutout's brushes, in the inspector's order.
@@ -591,6 +624,13 @@ pub struct Models {
     pub key_editor_rows: Rc<VecModel<KeyRowData>>,
     /// The ruler's diamonds; see `Studio::key_marks`.
     pub key_marks: Rc<VecModel<f32>>,
+    /// The plays on the ruler; see `Studio::montage_marks`.
+    pub play_marks: Rc<VecModel<PlayMarkData>>,
+    /// The tagging pane: its buttons, descriptors, list and filter.
+    pub tag_buttons: Rc<VecModel<TagButtonData>>,
+    pub tag_chips: Rc<VecModel<TagChipData>>,
+    pub tag_rows: Rc<VecModel<TagRowData>>,
+    pub tag_filter_options: Rc<VecModel<SharedString>>,
     pub library_views: Rc<VecModel<LibraryViewData>>,
     pub menu: Rc<VecModel<MenuItemData>>,
     pub bar: Rc<VecModel<MenuItemData>>,
@@ -659,6 +699,11 @@ impl Models {
             key_rows: Rc::new(VecModel::default()),
             key_editor_rows: Rc::new(VecModel::default()),
             key_marks: Rc::new(VecModel::default()),
+            play_marks: Rc::new(VecModel::default()),
+            tag_buttons: Rc::new(VecModel::default()),
+            tag_chips: Rc::new(VecModel::default()),
+            tag_rows: Rc::new(VecModel::default()),
+            tag_filter_options: Rc::new(VecModel::default()),
             library_views: Rc::new(VecModel::default()),
             menu: Rc::new(VecModel::default()),
             bar: Rc::new(VecModel::default()),
@@ -943,6 +988,42 @@ pub struct Studio {
     pub painting: bool,
     /// The mask analyses running, by media id, and how far each has got.
     cutout_jobs: HashMap<String, (bool, f32)>,
+
+    // ── drawing ──
+    /// The drawing tool out, as a row of `DRAW_KINDS`, if one is.
+    pub draw_tool: Option<usize>,
+    /// The style the next drawing takes.
+    pub draw_style: DrawStyle,
+    /// A zone or a link being clicked out: its clip, its points, and where
+    /// they were on the stage.
+    draw_draft: Option<(String, Vec<model::Anchor>, Vec<(f32, f32)>)>,
+
+    // ── tagging ──
+    /// The register in hand: the last one made or picked, by id.
+    tag_current: Option<String>,
+    /// The category the tagging pane's list shows, by name; all when none.
+    tag_filter: Option<String>,
+    /// The fewest stars a register needs to be listed.
+    tag_min_rating: u8,
+    /// Whether the tagging pane shows the template editor.
+    tag_editing: bool,
+
+    // ── montage ──
+    /// The in and out marks, in timeline seconds; see `mark_in_here`.
+    pub mark_in: Option<f32>,
+    pub mark_out: Option<f32>,
+
+    // ── football ──
+    /// Whether a press on the stage picks a tracked player of the selected
+    /// clip rather than moving the picture.
+    pub football_picking: bool,
+    /// The track picked last, which the marks are put on.
+    pub football_chosen: Option<u32>,
+    /// The football job running: what it is, for which clip, how far.
+    pub football_job: Option<(String, String, f32)>,
+    /// The players whose silhouettes have been asked for since the last
+    /// analysis, by media file; see `ensure_football_silhouettes`.
+    football_tried: HashSet<(String, u32)>,
     /// Enhance at work, by clip id: whether the model is still
     /// downloading, and how far along. One at a time, like every long job.
     enhance_jobs: HashMap<String, (bool, f32)>,
@@ -2071,6 +2152,19 @@ impl Studio {
             brush_size: 0.06,
             painting: true,
             cutout_jobs: HashMap::new(),
+            tag_current: None,
+            tag_filter: None,
+            tag_min_rating: 0,
+            tag_editing: false,
+            draw_tool: None,
+            draw_style: DrawStyle::default(),
+            draw_draft: None,
+            mark_in: None,
+            mark_out: None,
+            football_picking: false,
+            football_chosen: None,
+            football_job: None,
+            football_tried: HashSet::new(),
             enhance_jobs: HashMap::new(),
             reverse_jobs: HashMap::new(),
             region_job: None,
@@ -2444,6 +2538,7 @@ impl Studio {
         self.request_media_art();
         self.request_preview();
         self.ensure_cutouts();
+        self.ensure_football_silhouettes();
         self.ensure_regions();
     }
 
@@ -2670,6 +2765,22 @@ impl Studio {
                 .find(|flat| flat.path == path && (flat.start - start).abs() < 1e-6)
             {
                 flat.highlighted = true;
+            }
+        }
+        // While a player is being picked, the selected clip outlines every
+        // tracked box, the chosen one in the accent.
+        if self.football_picking
+            && let Some(target) = self.sole_selection().and_then(|id| self.clip(&id).cloned())
+            && let Some(media) = self.project().media_by_id(&target.media_id)
+        {
+            let (path, start) = (media.path.clone(), target.start);
+            if let Some(flat) = own
+                .get_or_insert_with(|| (*clips).clone())
+                .iter_mut()
+                .find(|flat| flat.path == path && (flat.start - start).abs() < 1e-6)
+            {
+                flat.football_picking = true;
+                flat.football_chosen = self.football_chosen;
             }
         }
         let clips = own.map(std::sync::Arc::new).unwrap_or(clips);
@@ -4365,6 +4476,7 @@ impl Studio {
             | Gesture::StageStretch { .. }
             | Gesture::TextWidth { .. }
             | Gesture::TextHeight { .. }
+            | Gesture::Draw { .. }
             | Gesture::Paint { .. } => {}
         }
         self.gesture = gesture;
@@ -4457,6 +4569,7 @@ impl Studio {
             | Gesture::StageStretch { .. }
             | Gesture::TextWidth { .. }
             | Gesture::TextHeight { .. }
+            | Gesture::Draw { .. }
             | Gesture::Paint { .. }) => {
                 self.gesture = other;
             }
@@ -5132,6 +5245,12 @@ impl Studio {
     /// of everything selected that is under the playhead. Empty stage
     /// clears the selection, as an empty lane does.
     pub fn stage_pressed(&mut self, x: f32, y: f32, additive: bool) {
+        if self.draw_press(x, y) {
+            return;
+        }
+        if self.football_pick_at(x, y) {
+            return;
+        }
         if let Some(clip) = self.paint_target() {
             let point = self.stage_to_source(&clip, f64::from(x), f64::from(y));
             self.gesture = Gesture::Paint {
@@ -5304,6 +5423,15 @@ impl Studio {
     /// the monitor composites it.
     pub fn stage_dragged(&mut self, x: f32, y: f32, snap: bool) {
         let mut gesture = std::mem::replace(&mut self.gesture, Gesture::None);
+        if let Gesture::Draw { anchors, screen, .. } = &mut gesture {
+            if let (Some(end), Some(last)) = (anchors.last_mut(), screen.last_mut()) {
+                *last = (x, y);
+                end.track = None;
+            }
+            self.gesture = gesture;
+            self.request_preview();
+            return;
+        }
         if let Gesture::Paint {
             clip,
             points,
@@ -5569,6 +5697,10 @@ impl Studio {
     /// transform command per picture, batched when there are several.
     pub fn stage_released(&mut self) {
         self.stage_guides.clear();
+        if matches!(self.gesture, Gesture::Draw { .. }) {
+            self.draw_released();
+            return;
+        }
         let overlay = matches!(self.gesture, Gesture::Paint { .. })
             .then(|| self.stroke_overlay())
             .filter(|(path, _, _)| !path.is_empty());
@@ -5743,6 +5875,1654 @@ impl Studio {
                     Err(error) if error.contains("cancelled") => {}
                     Err(error) => studio.notify(&tf("studio.removeBackground", &[&error]), true),
                 }
+            },
+        );
+    }
+
+    // ── drawing ──
+    //
+    // Telestration, the way KlipDraw does it: lines, arrows, curved runs,
+    // zones and lines joining players, drawn on the monitor over the
+    // selected clip and kept on it as drawings that appear at the playhead,
+    // draw themselves on and fade after their hold. A point placed on a
+    // tracked player keeps to his feet, so a line from a defender follows
+    // him. Line, arrow and curve are a drag; a zone and a link are a click
+    // per point and Finish.
+
+    /// The drawing kinds, in the inspector's order.
+    const DRAW_KINDS: [model::DrawKind; 5] = [
+        model::DrawKind::Line,
+        model::DrawKind::Arrow,
+        model::DrawKind::Curve,
+        model::DrawKind::Zone,
+        model::DrawKind::Link,
+    ];
+
+    /// Picks a drawing tool by its row, or puts it away when it is the one
+    /// already out: the stage draws while one is out.
+    pub fn draw_tool(&mut self, index: i32) {
+        let wanted = usize::try_from(index)
+            .ok()
+            .filter(|index| *index < Self::DRAW_KINDS.len());
+        self.draw_tool = if wanted == self.draw_tool { None } else { wanted };
+        self.draw_draft = None;
+        if self.draw_tool.is_some() {
+            self.painting = false;
+            self.football_picking = false;
+        }
+        self.request_preview();
+    }
+
+    /// One of the drawing tool's settings: 0 dashed (0 or 1), 1 thickness,
+    /// 2 hold in seconds, 3 reveal in seconds, 4 bend. They shape the next
+    /// drawing, and the selected clip's last one too, so a line just drawn
+    /// can be adjusted without drawing it again.
+    pub fn draw_option(&mut self, which: i32, value: f32) {
+        let value = f64::from(value);
+        match which {
+            0 => self.draw_style.dashed = value >= 0.5,
+            1 => self.draw_style.thickness = value.clamp(model::MARK_SCALE.0, model::MARK_SCALE.1),
+            2 => self.draw_style.hold = value.clamp(0.1, 600.0),
+            3 => self.draw_style.reveal = value.clamp(0.0, 10.0),
+            5 => {
+                // The freeze's own length, not the last drawing's.
+                self.draw_style.freeze = value.clamp(0.5, 60.0);
+                return;
+            }
+            _ => self.draw_style.bend = value.clamp(-1.0, 1.0),
+        }
+        self.restyle_last_drawing(&format!("draw-option-{which}"));
+    }
+
+    /// The drawing colour, as a row of the marks' palette.
+    pub fn draw_colour(&mut self, index: i32) {
+        if let Some(colour) = usize::try_from(index)
+            .ok()
+            .and_then(|index| Self::MARK_COLOURS.get(index).copied())
+        {
+            self.draw_style.colour = colour;
+            self.restyle_last_drawing("draw-colour");
+        }
+    }
+
+    /// The selected clip's last drawing given the tool's current style.
+    fn restyle_last_drawing(&mut self, gesture: &str) {
+        let Some(id) = self.sole_selection() else {
+            return;
+        };
+        let Some(clip) = self.clip(&id).cloned() else {
+            return;
+        };
+        let mut drawings = clip.drawings.clone();
+        let Some(last) = drawings.last_mut() else {
+            return;
+        };
+        let style = &self.draw_style;
+        last.dashed = style.dashed;
+        last.thickness = style.thickness;
+        last.hold = style.hold;
+        last.reveal = style.reveal.min(style.hold);
+        last.bend = style.bend;
+        last.colour = style.colour;
+        if drawings != clip.drawings {
+            self.apply_in(Some(gesture), Command::SetClipDrawings { clip_id: id, drawings });
+        }
+    }
+
+    /// The clip the drawing tool draws on: the one selected, if it is a
+    /// picture showing on the stage.
+    fn draw_target(&self) -> Option<Clip> {
+        self.draw_tool?;
+        let clip = self.sole_selection().and_then(|id| self.clip(&id).cloned())?;
+        (clip.kind.is_visual()
+            && !self.locked(&clip.track_id)
+            && self.stage_clips().into_iter().any(|shown| shown.id == clip.id))
+        .then_some(clip)
+    }
+
+    /// The point a stage press lands on, as a drawing keeps it: on the
+    /// feet of the tracked player under it when there is one.
+    fn anchor_at(&self, clip: &Clip, x: f32, y: f32) -> model::Anchor {
+        let at = self.stage_to_source(clip, f64::from(x), f64::from(y));
+        let tracked = self
+            .football_request(&clip.id)
+            .and_then(|request| concat_vision::football::shared(&request.dir()))
+            .and_then(|set| set.pick(self.source_at_playhead(clip), at[0] as f32, at[1] as f32));
+        match tracked {
+            Some(tracked) => {
+                let [l, _, r, b] = tracked.bbox;
+                model::Anchor {
+                    at: [f64::from((l + r) * 0.5), f64::from(b)],
+                    track: Some(tracked.id),
+                }
+            }
+            None => model::Anchor { at, track: None },
+        }
+    }
+
+    /// A press on the stage while a drawing tool is out: the start of a
+    /// line, or the next point of a zone or a link. `false` when no tool
+    /// is out or nothing is there to draw on.
+    fn draw_press(&mut self, x: f32, y: f32) -> bool {
+        let Some(clip) = self.draw_target() else {
+            return false;
+        };
+        let kind = Self::DRAW_KINDS[self.draw_tool.unwrap_or(0)];
+        let anchor = self.anchor_at(&clip, x, y);
+        match kind {
+            model::DrawKind::Zone | model::DrawKind::Link => {
+                let draft = self
+                    .draw_draft
+                    .take()
+                    .filter(|(held, _, _)| *held == clip.id)
+                    .unwrap_or((clip.id.clone(), Vec::new(), Vec::new()));
+                let (id, mut anchors, mut screen) = draft;
+                anchors.push(anchor);
+                screen.push((x, y));
+                self.draw_draft = Some((id, anchors, screen));
+            }
+            _ => {
+                self.gesture = Gesture::Draw {
+                    clip: clip.id.clone(),
+                    anchors: vec![anchor.clone(), anchor],
+                    screen: vec![(x, y), (x, y)],
+                };
+            }
+        }
+        self.request_preview();
+        true
+    }
+
+    /// The drawing in flight, as the stage's overlay draws it.
+    fn draw_overlay(&self) -> Option<(String, f32, bool)> {
+        let (screen, closed) = match (&self.gesture, &self.draw_draft) {
+            (Gesture::Draw { screen, .. }, _) => (screen, false),
+            (_, Some((_, _, screen))) => (
+                screen,
+                self.draw_tool.map(|index| Self::DRAW_KINDS[index]) == Some(model::DrawKind::Zone),
+            ),
+            _ => return None,
+        };
+        let (first, rest) = screen.split_first()?;
+        let mut path = format!("M {:.1} {:.1}", first.0 * 1000.0, first.1 * 1000.0);
+        for (x, y) in rest.iter().chain(rest.is_empty().then_some(first)) {
+            path.push_str(&format!(" L {:.1} {:.1}", x * 1000.0, y * 1000.0));
+        }
+        if closed && screen.len() > 2 {
+            path.push_str(" Z");
+        }
+        Some((path, 0.004 * self.draw_style.thickness as f32, false))
+    }
+
+    /// A drawing of `kind` through `anchors` on clip `id`, starting at the
+    /// playhead in the tool's style, as one undo step.
+    fn add_drawing(&mut self, id: &str, kind: model::DrawKind, points: Vec<model::Anchor>) {
+        let Some(clip) = self.clip(id).cloned() else {
+            return;
+        };
+        let style = self.draw_style.clone();
+        let mut drawings = clip.drawings.clone();
+        let here = (f64::from(self.playhead) - clip.start).clamp(0.0, clip.duration);
+        // On a still - a frozen frame - the drawings come one after another,
+        // each when the last has drawn itself on, and stay to the end: the
+        // way a broadcast walks through a frozen play. On footage each one
+        // is where the playhead is, for its hold.
+        let (start, hold) = if clip.kind == model::ClipKind::Image {
+            let after = drawings
+                .iter()
+                .map(|drawing| drawing.start + drawing.reveal)
+                .fold(here, f64::max)
+                .min((clip.duration - 0.1).max(0.0));
+            (after, (clip.duration - after).max(0.1))
+        } else {
+            (here, style.hold)
+        };
+        drawings.push(model::Drawing {
+            kind,
+            points,
+            dashed: style.dashed,
+            colour: style.colour,
+            thickness: style.thickness,
+            bend: style.bend,
+            start,
+            hold,
+            reveal: style.reveal.min(hold),
+        });
+        self.apply(Command::SetClipDrawings {
+            clip_id: id.to_owned(),
+            drawings,
+        });
+    }
+
+    /// The end of a drag with a line, an arrow or a curve: the drawing,
+    /// unless the drag was too short to be one.
+    fn draw_released(&mut self) {
+        let gesture = std::mem::replace(&mut self.gesture, Gesture::None);
+        let Gesture::Draw {
+            clip,
+            mut anchors,
+            screen,
+        } = gesture
+        else {
+            self.gesture = gesture;
+            return;
+        };
+        let (Some(first), Some(last)) = (screen.first(), screen.last()) else {
+            return;
+        };
+        if (last.0 - first.0).hypot(last.1 - first.1) < 0.01 {
+            self.request_preview();
+            return;
+        }
+        // The end lands on whoever is under it, now the pointer has stopped.
+        if let Some(target) = self.clip(&clip).cloned()
+            && let Some(end) = anchors.last_mut()
+        {
+            *end = self.anchor_at(&target, last.0, last.1);
+        }
+        let kind = Self::DRAW_KINDS[self.draw_tool.unwrap_or(0)];
+        self.add_drawing(&clip, kind, anchors);
+    }
+
+    /// Freeze and draw: the picture under the playhead held for the
+    /// freeze's length, the still selected and the playhead on it, ready
+    /// for the drawings to be laid out one after another.
+    pub fn draw_freeze(&mut self) {
+        let Some(id) = self.freeze_for(self.draw_style.freeze) else {
+            return;
+        };
+        if let Some(still) = self.clip(&id).cloned() {
+            self.seek(still.start as f32);
+        }
+        if self.draw_tool.is_none() {
+            self.draw_tool = Some(1);
+        }
+        self.painting = false;
+        self.football_picking = false;
+        self.notify(&t("draw.frozen"), false);
+    }
+
+    /// Finish: the zone or the link being clicked out becomes a drawing.
+    pub fn draw_finish(&mut self) {
+        let Some((id, anchors, _)) = self.draw_draft.take() else {
+            return;
+        };
+        let kind = Self::DRAW_KINDS[self.draw_tool.unwrap_or(3)];
+        let least = if kind == model::DrawKind::Zone { 3 } else { 2 };
+        if anchors.len() < least {
+            self.notify(&t("draw.morePoints"), true);
+            return;
+        }
+        self.add_drawing(&id, kind, anchors);
+    }
+
+    /// Takes the selected clip's last drawing away, or the point last
+    /// clicked when a zone or a link is being drawn.
+    pub fn draw_undo(&mut self) {
+        if let Some((_, anchors, screen)) = self.draw_draft.as_mut() {
+            anchors.pop();
+            screen.pop();
+            if anchors.is_empty() {
+                self.draw_draft = None;
+            }
+            self.request_preview();
+            return;
+        }
+        let Some(id) = self.sole_selection() else {
+            return;
+        };
+        let Some(clip) = self.clip(&id).cloned() else {
+            return;
+        };
+        if clip.drawings.is_empty() {
+            return;
+        }
+        let mut drawings = clip.drawings.clone();
+        drawings.pop();
+        self.apply(Command::SetClipDrawings { clip_id: id, drawings });
+    }
+
+    /// Takes every drawing off the selected clip.
+    pub fn draw_clear(&mut self) {
+        self.draw_draft = None;
+        let Some(id) = self.sole_selection() else {
+            return;
+        };
+        if self.clip(&id).is_some_and(|clip| !clip.drawings.is_empty()) {
+            self.apply(Command::SetClipDrawings {
+                clip_id: id,
+                drawings: Vec::new(),
+            });
+        }
+    }
+
+    // ── tagging ──
+    //
+    // Nacsport's way of marking a match: a button per category, pressed as
+    // the play happens, cuts a register round the playhead - the category's
+    // lead before it and its lag after - and the register in hand then takes
+    // descriptors and a rating. Registers are the timeline's plays, so the
+    // ruler shows them and the Montage menu walks them; the tagging pane
+    // lists them, filters them and makes a presentation of what it shows.
+
+    /// The template in force.
+    fn tag_template(&self) -> model::TagTemplate {
+        self.project().tag_template()
+    }
+
+    /// The template changed, as one undo step.
+    fn set_tag_template(&mut self, template: model::TagTemplate) {
+        self.apply(Command::SetTagTemplate { template });
+    }
+
+    /// A category button, or its key: a register of that category round
+    /// the playhead, which becomes the one in hand.
+    pub fn tag_press(&mut self, index: i32) {
+        let template = self.tag_template();
+        let Some(category) = usize::try_from(index)
+            .ok()
+            .and_then(|index| template.categories.get(index))
+        else {
+            return;
+        };
+        let at = f64::from(self.playhead);
+        let start = (at - category.lead).max(0.0);
+        let end = (at + category.lag).max(start + 0.1);
+        let mut plays = self.timeline().plays.clone();
+        let number = plays
+            .iter()
+            .filter_map(|play| play.id.strip_prefix('p')?.parse::<u32>().ok())
+            .max()
+            .unwrap_or(0)
+            + 1;
+        let same = plays.iter().filter(|play| play.tag == category.name).count() + 1;
+        let id = format!("p{number}");
+        plays.push(model::Play {
+            id: id.clone(),
+            name: format!("{} {same}", category.name),
+            tag: category.name.clone(),
+            start,
+            end,
+            descriptors: Vec::new(),
+            rating: 0,
+        });
+        self.apply(Command::SetPlays { plays });
+        self.tag_current = Some(id);
+    }
+
+    /// The register in hand: the last one made or picked, if it is still
+    /// there.
+    fn tag_in_hand(&self) -> Option<model::Play> {
+        let id = self.tag_current.as_ref()?;
+        self.timeline().plays.iter().find(|play| play.id == *id).cloned()
+    }
+
+    /// Changes the register in hand with `edit`, as one undo step.
+    fn edit_in_hand(&mut self, edit: impl FnOnce(&mut model::Play)) {
+        let Some(id) = self.tag_current.clone() else {
+            self.notify(&t("tag.tagFirst"), true);
+            return;
+        };
+        let mut plays = self.timeline().plays.clone();
+        let Some(play) = plays.iter_mut().find(|play| play.id == id) else {
+            return;
+        };
+        edit(play);
+        self.apply(Command::SetPlays { plays });
+    }
+
+    /// A descriptor on the register in hand, on or off.
+    pub fn tag_descriptor(&mut self, index: i32) {
+        let template = self.tag_template();
+        let Some(name) = usize::try_from(index)
+            .ok()
+            .and_then(|index| template.descriptors.get(index))
+            .cloned()
+        else {
+            return;
+        };
+        self.edit_in_hand(|play| {
+            if let Some(at) = play.descriptors.iter().position(|held| *held == name) {
+                play.descriptors.remove(at);
+            } else {
+                play.descriptors.push(name);
+            }
+        });
+    }
+
+    /// The register in hand rated `stars`, or unrated when it already is.
+    pub fn tag_rate(&mut self, stars: i32) {
+        let stars = stars.clamp(0, 5) as u8;
+        self.edit_in_hand(|play| {
+            play.rating = if play.rating == stars { 0 } else { stars };
+        });
+    }
+
+    /// A register picked from the list: in hand, the playhead at its start
+    /// and its stretch marked.
+    pub fn tag_select(&mut self, id: &str) {
+        let Some(play) = self.timeline().plays.iter().find(|play| play.id == id).cloned() else {
+            return;
+        };
+        self.tag_current = Some(play.id);
+        self.seek(play.start as f32);
+        self.mark_in = Some(play.start as f32);
+        self.mark_out = Some(play.end as f32);
+    }
+
+    /// A register deleted.
+    pub fn tag_delete(&mut self, id: &str) {
+        let mut plays = self.timeline().plays.clone();
+        plays.retain(|play| play.id != id);
+        if self.tag_current.as_deref() == Some(id) {
+            self.tag_current = None;
+        }
+        self.apply(Command::SetPlays { plays });
+    }
+
+    /// The list shows one category, by its row, or all of them at -1.
+    pub fn tag_filter_category(&mut self, index: i32) {
+        let template = self.tag_template();
+        self.tag_filter = usize::try_from(index)
+            .ok()
+            .and_then(|index| template.categories.get(index))
+            .map(|category| category.name.clone());
+    }
+
+    /// The list shows registers rated at least `stars`.
+    pub fn tag_filter_rating(&mut self, stars: i32) {
+        self.tag_min_rating = stars.clamp(0, 5) as u8;
+    }
+
+    /// The registers the list shows, by when they happen.
+    fn tag_filtered(&self) -> Vec<model::Play> {
+        let mut plays: Vec<model::Play> = self
+            .timeline()
+            .plays
+            .iter()
+            .filter(|play| self.tag_filter.as_ref().is_none_or(|tag| play.tag == *tag))
+            .filter(|play| play.rating >= self.tag_min_rating)
+            .cloned()
+            .collect();
+        plays.sort_by(|a, b| a.start.total_cmp(&b.start));
+        plays
+    }
+
+    /// The registers the list shows, made into a presentation: a timeline
+    /// of their own, end to end.
+    pub fn tag_present(&mut self) {
+        let plays = self.tag_filtered();
+        let name = match &self.tag_filter {
+            Some(tag) => tf("montage.highlightsOf", &[tag]),
+            None => t("tag.presentation"),
+        };
+        self.build_highlights_from(plays, name);
+    }
+
+    /// The template editor open or shut.
+    pub fn tag_edit(&mut self, on: bool) {
+        self.tag_editing = on;
+    }
+
+    /// A category added to the template, in the next colour of the round.
+    pub fn tag_category_add(&mut self, name: &str) {
+        const ROUND: [[u8; 3]; 8] = [
+            [0x34, 0x98, 0xdb],
+            [0x2e, 0xcc, 0x71],
+            [0x9b, 0x59, 0xb6],
+            [0xe6, 0x7e, 0x22],
+            [0x1a, 0xbc, 0x9c],
+            [0xe7, 0x4c, 0x3c],
+            [0xf1, 0xc4, 0x0f],
+            [0x95, 0xa5, 0xa6],
+        ];
+        let mut template = self.tag_template();
+        let colour = ROUND[template.categories.len() % ROUND.len()];
+        template.categories.push(model::TagCategory::new(name, colour));
+        self.set_tag_template(template);
+    }
+
+    /// A category taken off the template; its registers stay.
+    pub fn tag_category_remove(&mut self, index: i32) {
+        let mut template = self.tag_template();
+        if let Ok(index) = usize::try_from(index)
+            && index < template.categories.len()
+        {
+            template.categories.remove(index);
+            self.set_tag_template(template);
+        }
+    }
+
+    /// A category's reach: `which` 0 before the press, 1 after it.
+    pub fn tag_category_time(&mut self, index: i32, which: i32, seconds: f32) {
+        let mut template = self.tag_template();
+        let Some(category) = usize::try_from(index)
+            .ok()
+            .and_then(|index| template.categories.get_mut(index))
+        else {
+            return;
+        };
+        let seconds = f64::from(seconds).clamp(0.0, 60.0);
+        if which == 0 {
+            category.lead = seconds;
+        } else {
+            category.lag = seconds;
+        }
+        self.apply_in(
+            Some("tag-time"),
+            Command::SetTagTemplate { template },
+        );
+    }
+
+    /// A descriptor added to the template.
+    pub fn tag_descriptor_add(&mut self, name: &str) {
+        let mut template = self.tag_template();
+        template.descriptors.push(name.to_owned());
+        self.set_tag_template(template);
+    }
+
+    /// A descriptor taken off the template; registers keep it.
+    pub fn tag_descriptor_remove(&mut self, index: i32) {
+        let mut template = self.tag_template();
+        if let Ok(index) = usize::try_from(index)
+            && index < template.descriptors.len()
+        {
+            template.descriptors.remove(index);
+            self.set_tag_template(template);
+        }
+    }
+
+    /// The colour a play is drawn in: its category's, else its tag's from
+    /// the Montage menu's round, else grey.
+    fn play_colour(&self, template: &model::TagTemplate, tag: &str) -> [u8; 3] {
+        template
+            .categories
+            .iter()
+            .find(|category| category.name == tag)
+            .map(|category| category.colour)
+            .or_else(|| {
+                Self::PLAY_TAGS
+                    .iter()
+                    .find(|(name, _)| *name == tag)
+                    .map(|(_, colour)| *colour)
+            })
+            .unwrap_or([0x95, 0xa5, 0xa6])
+    }
+
+    /// The tagging pane's buttons.
+    fn tag_buttons(&self) -> Vec<TagButtonData> {
+        let template = self.tag_template();
+        let plays = &self.timeline().plays;
+        template
+            .categories
+            .iter()
+            .enumerate()
+            .map(|(index, category)| {
+                let [r, g, b] = category.colour;
+                TagButtonData {
+                    name: category.name.clone().into(),
+                    colour: slint::Color::from_rgb_u8(r, g, b),
+                    key: if index < 9 {
+                        (index + 1).to_string().into()
+                    } else {
+                        SharedString::new()
+                    },
+                    count: plays.iter().filter(|play| play.tag == category.name).count() as i32,
+                    lead: category.lead as f32,
+                    lag: category.lag as f32,
+                }
+            })
+            .collect()
+    }
+
+    /// The tagging pane's descriptors, lit where the register in hand has
+    /// them.
+    fn tag_chips(&self) -> Vec<TagChipData> {
+        let held = self.tag_in_hand().map(|play| play.descriptors).unwrap_or_default();
+        self.tag_template()
+            .descriptors
+            .into_iter()
+            .map(|name| TagChipData {
+                on: held.contains(&name),
+                name: name.into(),
+            })
+            .collect()
+    }
+
+    /// The tagging pane's list.
+    fn tag_rows(&self) -> Vec<TagRowData> {
+        let template = self.tag_template();
+        self.tag_filtered()
+            .into_iter()
+            .map(|play| {
+                let [r, g, b] = self.play_colour(&template, &play.tag);
+                TagRowData {
+                    current: self.tag_current.as_deref() == Some(play.id.as_str()),
+                    id: play.id.into(),
+                    time: Self::montage_clock(play.start as f32).into(),
+                    name: play.name.into(),
+                    colour: slint::Color::from_rgb_u8(r, g, b),
+                    descriptors: play.descriptors.join(" · ").into(),
+                    rating: i32::from(play.rating),
+                }
+            })
+            .collect()
+    }
+
+    /// Publishes the tagging pane.
+    fn publish_tagging(&self, editor: &Editor<'_>, models: &Models) {
+        sync(&models.tag_buttons, self.tag_buttons());
+        sync(&models.tag_chips, self.tag_chips());
+        sync(&models.tag_rows, self.tag_rows());
+        let template = self.tag_template();
+        let options: Vec<SharedString> = std::iter::once(t("tag.all").into())
+            .chain(template.categories.iter().map(|category| category.name.clone().into()))
+            .collect();
+        sync(&models.tag_filter_options, options);
+        editor.set_tag_filter(
+            self.tag_filter
+                .as_ref()
+                .and_then(|tag| template.categories.iter().position(|category| category.name == *tag))
+                .map_or(-1, |index| index as i32),
+        );
+        editor.set_tag_min_rating(i32::from(self.tag_min_rating));
+        editor.set_tag_editing(self.tag_editing);
+        let in_hand = self.tag_in_hand();
+        editor.set_tag_current(in_hand.as_ref().map(|play| play.name.clone()).unwrap_or_default().into());
+        editor.set_tag_rating(in_hand.map_or(0, |play| i32::from(play.rating)));
+    }
+
+    // ── montage ──
+    //
+    // The cutting tools as a broadcast editor's keyboard has them, each one
+    // a single key that does one thing to what is under the playhead: Q and
+    // W take away what is left or right of it, closing the gap; I and O
+    // mark a stretch of the timeline, E takes it out and closes up, R lifts
+    // it and leaves the hole. Plays are marked stretches with a tag, kept
+    // on the timeline, and the highlights are a new timeline cut from them
+    // end to end.
+
+    /// The clips Q and W act on: the selected ones under the playhead, or
+    /// every clip under it on an unlocked lane when none of the selection
+    /// is.
+    fn under_playhead(&self) -> Vec<Clip> {
+        let at = f64::from(self.playhead);
+        let edge = f64::from(MIN_DURATION);
+        let straddles =
+            |clip: &Clip| clip.start + edge < at && at < clip.start + clip.duration - edge;
+        let selected: Vec<Clip> = self
+            .selection
+            .iter()
+            .filter_map(|id| self.clip(id).cloned())
+            .filter(|clip| straddles(clip) && !self.locked(&clip.track_id))
+            .collect();
+        if !selected.is_empty() {
+            return selected;
+        }
+        self.timeline()
+            .clips
+            .iter()
+            .filter(|clip| straddles(clip) && !self.locked(&clip.track_id))
+            .map(|clip| (**clip).clone())
+            .collect()
+    }
+
+    /// Q: what is left of the playhead goes, and the lane closes up behind
+    /// it, so the playhead lands on the cut.
+    pub fn delete_left(&mut self) {
+        let clips = self.under_playhead();
+        if clips.is_empty() {
+            self.notify(&t("montage.nothingUnderPlayhead"), true);
+            return;
+        }
+        let at = f64::from(self.playhead);
+        let commands: Vec<Command> = clips
+            .iter()
+            .map(|clip| Command::TrimClip {
+                clip_id: clip.id.clone(),
+                edge: TrimEdge::Start,
+                delta: at - clip.start,
+                ripple: true,
+            })
+            .collect();
+        let back = clips.iter().map(|clip| clip.start).fold(f64::MAX, f64::min);
+        self.apply(Command::Batch { commands });
+        self.seek(back as f32);
+    }
+
+    /// W: what is right of the playhead goes, and the lane closes up.
+    pub fn delete_right(&mut self) {
+        let clips = self.under_playhead();
+        if clips.is_empty() {
+            self.notify(&t("montage.nothingUnderPlayhead"), true);
+            return;
+        }
+        let at = f64::from(self.playhead);
+        let commands: Vec<Command> = clips
+            .iter()
+            .map(|clip| Command::TrimClip {
+                clip_id: clip.id.clone(),
+                edge: TrimEdge::End,
+                delta: at - (clip.start + clip.duration),
+                ripple: true,
+            })
+            .collect();
+        self.apply(Command::Batch { commands });
+    }
+
+    /// I: the stretch begins at the playhead.
+    pub fn mark_in_here(&mut self) {
+        self.mark_in = Some(self.playhead);
+        if self.mark_out.is_some_and(|out| out <= self.playhead) {
+            self.mark_out = None;
+        }
+    }
+
+    /// O: the stretch ends at the playhead.
+    pub fn mark_out_here(&mut self) {
+        self.mark_out = Some(self.playhead);
+        if self.mark_in.is_some_and(|start| start >= self.playhead) {
+            self.mark_in = None;
+        }
+    }
+
+    /// X: no stretch.
+    pub fn clear_marks(&mut self) {
+        self.mark_in = None;
+        self.mark_out = None;
+    }
+
+    /// The marked stretch, in timeline seconds: from the in mark, or the
+    /// start, to the out mark, or the end. `None` with no mark at all.
+    fn marked(&self) -> Option<(f64, f64)> {
+        if self.mark_in.is_none() && self.mark_out.is_none() {
+            return None;
+        }
+        let start = f64::from(self.mark_in.unwrap_or(0.0));
+        let end = f64::from(self.mark_out.unwrap_or(self.duration()));
+        (end - start > f64::from(MIN_DURATION)).then_some((start, end))
+    }
+
+    /// E (`closing`) or R: the marked stretch taken out of every unlocked
+    /// lane. E closes the timeline up behind it, the way Extract does in
+    /// every editor; R lifts it and leaves the hole. One undo step.
+    pub fn take_out_marked(&mut self, closing: bool) {
+        let Some((start, end)) = self.marked() else {
+            self.notify(&t("montage.markFirst"), true);
+            return;
+        };
+        let gesture = if closing { "extract" } else { "lift" };
+        let edge = f64::from(MIN_DURATION);
+        for cut in [start, end] {
+            let ids: Vec<String> = self
+                .timeline()
+                .clips
+                .iter()
+                .filter(|clip| {
+                    clip.start + edge < cut
+                        && cut < clip.start + clip.duration - edge
+                        && !self.locked(&clip.track_id)
+                })
+                .map(|clip| clip.id.clone())
+                .collect();
+            if !ids.is_empty() {
+                self.apply_in(Some(gesture), Command::SplitClips { clip_ids: ids, time: cut });
+            }
+        }
+        let inside: Vec<String> = self
+            .timeline()
+            .clips
+            .iter()
+            .filter(|clip| {
+                clip.start >= start - edge
+                    && clip.start + clip.duration <= end + edge
+                    && !self.locked(&clip.track_id)
+            })
+            .map(|clip| clip.id.clone())
+            .collect();
+        if !inside.is_empty() {
+            self.apply_in(
+                Some(gesture),
+                Command::RemoveClips {
+                    clip_ids: inside,
+                    ripple: false,
+                },
+            );
+        }
+        if closing {
+            let length = end - start;
+            let moves: Vec<ClipMove> = self
+                .timeline()
+                .clips
+                .iter()
+                .filter(|clip| clip.start >= end - edge && !self.locked(&clip.track_id))
+                .map(|clip| ClipMove {
+                    clip_id: clip.id.clone(),
+                    start: (clip.start - length).max(0.0),
+                    track_id: clip.track_id.clone(),
+                })
+                .collect();
+            if !moves.is_empty() {
+                self.apply_in(Some(gesture), Command::MoveClips { moves });
+            }
+        }
+        self.end_burst();
+        self.selection.clear();
+        self.clear_marks();
+        self.seek(start as f32);
+    }
+
+    /// The tags a play can wear, in the menu's order, with the colour each
+    /// is drawn in on the ruler.
+    pub const PLAY_TAGS: [(&'static str, [u8; 3]); 8] = [
+        ("goal", [0x2e, 0xcc, 0x71]),
+        ("chance", [0xf1, 0xc4, 0x0f]),
+        ("press", [0xe6, 0x7e, 0x22]),
+        ("attack", [0x34, 0x98, 0xdb]),
+        ("defence", [0x9b, 0x59, 0xb6]),
+        ("setPiece", [0x1a, 0xbc, 0x9c]),
+        ("error", [0xe7, 0x4c, 0x3c]),
+        ("other", [0x95, 0xa5, 0xa6]),
+    ];
+
+    /// Seconds as minutes and seconds, the way a match clock reads.
+    fn montage_clock(seconds: f32) -> String {
+        let whole = seconds.max(0.0).round() as u32;
+        format!("{}:{:02}", whole / 60, whole % 60)
+    }
+
+    /// A tag's name in the interface's language.
+    fn play_tag_name(tag: &str) -> String {
+        if Self::PLAY_TAGS.iter().any(|(known, _)| *known == tag) {
+            t(&format!("montage.tag.{tag}"))
+        } else {
+            tag.to_owned()
+        }
+    }
+
+    /// The plays on the active timeline, by where they start.
+    fn plays_in_order(&self) -> Vec<model::Play> {
+        let mut plays = self.timeline().plays.clone();
+        plays.sort_by(|a, b| a.start.total_cmp(&b.start));
+        plays
+    }
+
+    /// P, or a tag from the menu: the marked stretch becomes a play - or,
+    /// with nothing marked, the selected clip's span, or failing that the
+    /// clip under the playhead's.
+    pub fn add_play(&mut self, tag: &str) {
+        let span = self.marked().or_else(|| {
+            let clip = self
+                .sole_selection()
+                .and_then(|id| self.clip(&id).cloned())
+                .or_else(|| self.under_playhead().into_iter().next())?;
+            Some((clip.start, clip.start + clip.duration))
+        });
+        let Some((start, end)) = span else {
+            self.notify(&t("montage.markFirst"), true);
+            return;
+        };
+        let mut plays = self.timeline().plays.clone();
+        let number = plays
+            .iter()
+            .filter_map(|play| play.id.strip_prefix('p')?.parse::<u32>().ok())
+            .max()
+            .unwrap_or(0)
+            + 1;
+        let same = plays.iter().filter(|play| play.tag == tag).count() + 1;
+        plays.push(model::Play {
+            id: format!("p{number}"),
+            name: format!("{} {same}", Self::play_tag_name(tag)),
+            tag: tag.to_owned(),
+            start,
+            end,
+            descriptors: Vec::new(),
+            rating: 0,
+        });
+        self.apply(Command::SetPlays { plays });
+        self.clear_marks();
+        self.notify(
+            &tf(
+                "montage.playAdded",
+                &[&Self::play_tag_name(tag), &Self::montage_clock(start as f32)],
+            ),
+            false,
+        );
+    }
+
+    /// Deletes the play under the playhead, the latest-starting one when
+    /// plays overlap there.
+    pub fn remove_play_here(&mut self) {
+        let at = f64::from(self.playhead);
+        let mut plays = self.timeline().plays.clone();
+        let Some(index) = plays
+            .iter()
+            .enumerate()
+            .filter(|(_, play)| play.start <= at && at <= play.end)
+            .max_by(|a, b| a.1.start.total_cmp(&b.1.start))
+            .map(|(index, _)| index)
+        else {
+            self.notify(&t("montage.noPlayHere"), true);
+            return;
+        };
+        plays.remove(index);
+        self.apply(Command::SetPlays { plays });
+    }
+
+    /// [ and ]: the playhead to the start of the play before or after it.
+    pub fn jump_play(&mut self, forward: bool) {
+        let at = f64::from(self.playhead);
+        let plays = self.plays_in_order();
+        let target = if forward {
+            plays.iter().find(|play| play.start > at + 1e-3)
+        } else {
+            plays.iter().rev().find(|play| play.start < at - 1e-3)
+        };
+        if let Some(play) = target {
+            let (start, end) = (play.start, play.end);
+            self.seek(start as f32);
+            self.mark_in = Some(start as f32);
+            self.mark_out = Some(end as f32);
+        }
+    }
+
+    /// The highlights: a new timeline holding every play - or every play
+    /// of `tag` - cut from this one end to end, in the order they happen,
+    /// on the lanes they were on. The source timeline is left as it was.
+    pub fn build_highlights(&mut self, tag: Option<&str>) {
+        let plays: Vec<model::Play> = self
+            .plays_in_order()
+            .into_iter()
+            .filter(|play| tag.is_none_or(|tag| play.tag == tag))
+            .collect();
+        let name = match tag {
+            Some(tag) => tf("montage.highlightsOf", &[&Self::play_tag_name(tag)]),
+            None => t("montage.highlights"),
+        };
+        self.build_highlights_from(plays, name);
+    }
+
+    /// A new timeline called `name` holding `plays`, cut from this one end
+    /// to end in the order they happen; see `build_highlights`.
+    pub fn build_highlights_from(&mut self, mut plays: Vec<model::Play>, name: String) {
+        plays.sort_by(|a, b| a.start.total_cmp(&b.start));
+        if plays.is_empty() {
+            self.notify(&t("montage.noPlays"), true);
+            return;
+        }
+        let source = self.timeline().clone();
+        let gesture = "highlights";
+        self.apply_in(Some(gesture), Command::AddTimeline);
+        let id = self.timeline().id.clone();
+        self.apply_in(
+            Some(gesture),
+            Command::RenameTimeline {
+                timeline_id: id,
+                name,
+            },
+        );
+        while self.timeline().tracks.len() < source.tracks.len() {
+            self.apply_in(Some(gesture), Command::AddTrack { bottom: false });
+        }
+        let lanes: Vec<String> = self.timeline().tracks.iter().map(|track| track.id.clone()).collect();
+        let edge = f64::from(MIN_DURATION);
+        let mut cursor = 0.0;
+        for play in &plays {
+            let mut pieces: Vec<&Arc<Clip>> = source
+                .clips
+                .iter()
+                .filter(|clip| {
+                    clip.start < play.end - edge && clip.start + clip.duration > play.start + edge
+                })
+                .collect();
+            pieces.sort_by(|a, b| a.start.total_cmp(&b.start));
+            for clip in pieces {
+                let Some(row) = source.tracks.iter().position(|track| track.id == clip.track_id)
+                else {
+                    continue;
+                };
+                let from = clip.start.max(play.start);
+                let to = (clip.start + clip.duration).min(play.end);
+                let mut piece = (**clip).clone();
+                piece.source_start = clip.source_start + (from - clip.start) * clip.speed;
+                piece.start = cursor + (from - play.start);
+                piece.duration = to - from;
+                self.place_piece(&piece, &lanes[row], gesture);
+            }
+            cursor += play.end - play.start;
+        }
+        self.end_burst();
+        self.selection.clear();
+        self.seek(0.0);
+        self.notify(&tf("montage.highlightsBuilt", &[&plays.len()]), false);
+    }
+
+    /// One stretch of a clip laid on `lane` exactly as `piece` says - its
+    /// start, length and in-point - with the clip's looks. Titles and
+    /// shapes have no in-point and are placed as copies are.
+    fn place_piece(&mut self, piece: &Clip, lane: &str, gesture: &str) {
+        if matches!(piece.kind, model::ClipKind::Text | model::ClipKind::Shape) {
+            self.place_copy(piece, lane, piece.start, Some(gesture));
+            return;
+        }
+        let Some(created) = self.apply_in(
+            Some(gesture),
+            Command::AddClip {
+                media_id: piece.media_id.clone(),
+                track_id: lane.to_owned(),
+                start: piece.start,
+                ripple: false,
+            },
+        ) else {
+            return;
+        };
+        let mut commands = Vec::new();
+        if (piece.speed - 1.0).abs() > 1e-9 {
+            commands.push(Command::SetClipSpeed {
+                clip_id: created.clone(),
+                speed: piece.speed,
+            });
+        }
+        self.apply_in(Some(gesture), Command::Batch { commands });
+        let Some(placed) = self.clip(&created).cloned() else {
+            return;
+        };
+        // The head cut to the in-point, which moves the clip right by as
+        // much; the tail cut to the length; and the clip back where it goes.
+        let head = (piece.source_start - placed.source_start) / piece.speed.max(1e-6);
+        let mut commands = vec![Command::TrimClip {
+            clip_id: created.clone(),
+            edge: TrimEdge::Start,
+            delta: head,
+            ripple: false,
+        }];
+        let tail = piece.duration - (placed.duration - head);
+        commands.push(Command::TrimClip {
+            clip_id: created.clone(),
+            edge: TrimEdge::End,
+            delta: tail,
+            ripple: false,
+        });
+        commands.push(Command::MoveClips {
+            moves: vec![ClipMove {
+                clip_id: created.clone(),
+                start: piece.start,
+                track_id: lane.to_owned(),
+            }],
+        });
+        commands.push(Command::SetClipTransform {
+            clip_id: created.clone(),
+            scale: Some(piece.scale),
+            offset_x: Some(piece.offset_x),
+            offset_y: Some(piece.offset_y),
+            rotation: Some(piece.rotation),
+            stretch_x: Some(piece.stretch_x),
+            stretch_y: Some(piece.stretch_y),
+        });
+        commands.push(Command::UpdateClip {
+            clip_id: created.clone(),
+            patch: ClipPatch {
+                name: Some(piece.name.clone()),
+                volume: Some(piece.volume),
+                opacity: Some(piece.opacity),
+                preserve_pitch: Some(piece.preserve_pitch),
+                muted: piece.muted,
+                flip_h: Some(piece.flip_h),
+                flip_v: Some(piece.flip_v),
+                blend: Some(piece.blend.clone()),
+                crop: Some(piece.crop),
+                filters: Some(piece.filters.clone()),
+                video_effects: Some(piece.video_effects.clone()),
+                ..ClipPatch::default()
+            },
+        });
+        if !piece.football.is_empty() {
+            commands.push(Command::SetClipFootball {
+                clip_id: created.clone(),
+                marks: piece.football.clone(),
+            });
+        }
+        self.apply_in(Some(gesture), Command::Batch { commands });
+    }
+
+    /// The Montage menu's rows and the keys' actions, by id.
+    pub fn montage_action(&mut self, action: &str) {
+        match action {
+            "delete-left" => self.delete_left(),
+            "delete-right" => self.delete_right(),
+            "mark-in" => self.mark_in_here(),
+            "mark-out" => self.mark_out_here(),
+            "clear-marks" => self.clear_marks(),
+            "extract" => self.take_out_marked(true),
+            "lift" => self.take_out_marked(false),
+            "play-add" => self.add_play("other"),
+            "play-remove" => self.remove_play_here(),
+            "play-prev" => self.jump_play(false),
+            "play-next" => self.jump_play(true),
+            "highlights" => self.build_highlights(None),
+            other => {
+                if let Some(tag) = other.strip_prefix("play-add:") {
+                    self.add_play(tag);
+                } else if let Some(tag) = other.strip_prefix("highlights:") {
+                    self.build_highlights(Some(tag));
+                } else if let Some(id) = other.strip_prefix("play-go:") {
+                    if let Some(play) = self.timeline().plays.iter().find(|play| play.id == id) {
+                        let (start, end) = (play.start, play.end);
+                        self.seek(start as f32);
+                        self.mark_in = Some(start as f32);
+                        self.mark_out = Some(end as f32);
+                    }
+                }
+            }
+        }
+    }
+
+    /// The Montage menu: the cutting keys, the marks, and the plays.
+    fn montage_menu(&self) -> Vec<MenuItemData> {
+        let row = |id: &str, label: String, glyph: Glyph, shortcut: &str, enabled: bool| {
+            MenuItemData {
+                id: id.into(),
+                label: label.into(),
+                kind: MenuRow::Action,
+                glyph,
+                shortcut: shortcut.into(),
+                enabled,
+                danger: false,
+                checkable: false,
+                checked: false,
+            }
+        };
+        let rule = || MenuItemData {
+            kind: MenuRow::Separator,
+            ..Default::default()
+        };
+        let under = !self.under_playhead().is_empty();
+        let marked = self.marked().is_some();
+        let plays = self.plays_in_order();
+        let mut rows = vec![
+            row("delete-left", t("montage.deleteLeft"), Glyph::Razor, "Q", under),
+            row("delete-right", t("montage.deleteRight"), Glyph::Razor, "W", under),
+            rule(),
+            row("mark-in", t("montage.markIn"), Glyph::None, "I", true),
+            row("mark-out", t("montage.markOut"), Glyph::None, "O", true),
+            row("clear-marks", t("montage.clearMarks"), Glyph::None, "X", marked),
+            row("extract", t("montage.extract"), Glyph::Trash, "E", marked),
+            row("lift", t("montage.lift"), Glyph::Trash, "R", marked),
+            rule(),
+        ];
+        for (tag, _) in Self::PLAY_TAGS {
+            rows.push(row(
+                &format!("play-add:{tag}"),
+                tf("montage.addPlayAs", &[&Self::play_tag_name(tag)]),
+                Glyph::Plus,
+                if tag == "other" { "P" } else { "" },
+                true,
+            ));
+        }
+        rows.push(rule());
+        rows.push(row("play-prev", t("montage.prevPlay"), Glyph::SkipBack, "[", !plays.is_empty()));
+        rows.push(row("play-next", t("montage.nextPlay"), Glyph::SkipForward, "]", !plays.is_empty()));
+        let at = f64::from(self.playhead);
+        rows.push(row(
+            "play-remove",
+            t("montage.removePlay"),
+            Glyph::Trash,
+            "",
+            plays.iter().any(|play| play.start <= at && at <= play.end),
+        ));
+        rows.push(rule());
+        rows.push(row(
+            "highlights",
+            tf("montage.buildHighlights", &[&plays.len()]),
+            Glyph::None,
+            "",
+            !plays.is_empty(),
+        ));
+        for (tag, _) in Self::PLAY_TAGS {
+            let count = plays.iter().filter(|play| play.tag == tag).count();
+            if count > 0 {
+                rows.push(row(
+                    &format!("highlights:{tag}"),
+                    tf("montage.buildHighlightsOf", &[&Self::play_tag_name(tag), &count]),
+                    Glyph::None,
+                    "",
+                    true,
+                ));
+            }
+        }
+        if !plays.is_empty() {
+            rows.push(rule());
+            for play in plays.iter().take(20) {
+                rows.push(row(
+                    &format!("play-go:{}", play.id),
+                    format!(
+                        "{}  {}  ({})",
+                        Self::montage_clock(play.start as f32),
+                        play.name,
+                        Self::montage_clock((play.end - play.start) as f32)
+                    ),
+                    Glyph::None,
+                    "",
+                    true,
+                ));
+            }
+        }
+        rows
+    }
+
+    /// The plays as the ruler draws them, and the marked stretch.
+    fn montage_marks(&self) -> Vec<PlayMarkData> {
+        let template = self.tag_template();
+        self.plays_in_order()
+            .into_iter()
+            .map(|play| {
+                let [r, g, b] = self.play_colour(&template, &play.tag);
+                PlayMarkData {
+                    start: play.start as f32,
+                    end: play.end as f32,
+                    label: play.name.clone().into(),
+                    colour: slint::Color::from_rgb_u8(r, g, b),
+                }
+            })
+            .collect()
+    }
+
+    // ── football ──
+    //
+    // The football analysis finds the players and the ball in a clip's
+    // footage and follows them; a mark on a tracked thing shades it,
+    // spotlights it, rings it, takes it out of the picture or keeps it
+    // alone. Moving a player is two marks on two layers: a copy of the
+    // clip above that keeps only him, which the stage moves like any
+    // picture, and the player erased from the clip beneath. Copying one is
+    // the first half, and the copy cuts, copies and pastes like any clip.
+
+    /// The analysis request for clip `id`, when the project has a folder.
+    fn football_request(&self, id: &str) -> Option<concat_host::FootballRequest> {
+        let session = self.session.as_ref()?;
+        let project = std::path::PathBuf::from(session.path());
+        concat_host::FootballRequest::for_clip(self.project(), &project, id)
+    }
+
+    /// Whether clip `id`'s footage has been analysed.
+    pub fn football_analysed(&self, id: &str) -> bool {
+        self.football_request(id)
+            .is_some_and(|request| request.analysed())
+    }
+
+    /// Finds and tracks the players and the ball in the selected clip's
+    /// footage, unless a football job is running.
+    pub fn football_analyse(&mut self) {
+        if self.football_job.is_some() || self.host.footballs.is_busy() {
+            return;
+        }
+        let Some(id) = self.sole_selection() else {
+            return;
+        };
+        let Some(request) = self.football_request(&id) else {
+            self.notify(&t("football.needsFootage"), true);
+            return;
+        };
+        self.football_job = Some(("analyse".to_owned(), id.clone(), 0.0));
+        self.football_chosen = None;
+        let footballs = Arc::clone(&self.host.footballs);
+        let epoch = crate::host::project_epoch();
+        spawn_in_project(
+            move || {
+                let mut last = -1.0f32;
+                footballs.analyse(&request, &mut |progress| {
+                    let now = match progress {
+                        concat_host::cutout::Progress::Fetching { .. } => 0.0,
+                        concat_host::cutout::Progress::Analysing(fraction) => fraction,
+                    };
+                    if now - last >= 0.01 {
+                        last = now;
+                        on_ui_in_project(epoch, move |studio, _, _| {
+                            if let Some(job) = studio.football_job.as_mut() {
+                                job.2 = now;
+                            }
+                        });
+                    }
+                })
+            },
+            |studio, _, _, result| {
+                studio.football_job = None;
+                match result {
+                    Ok(_) => {
+                        studio.football_picking = true;
+                        studio.painting = false;
+                        // The silhouettes were read in the old boxes and are
+                        // gone; every marked player is read again.
+                        studio.football_tried.clear();
+                        studio.notify(&t("football.analysed"), false);
+                        studio.request_preview();
+                        studio.ensure_football_silhouettes();
+                    }
+                    Err(error) if error.contains("cancelled") => {}
+                    Err(error) => studio.notify(&tf("football.failed", &[&error]), true),
+                }
+            },
+        );
+    }
+
+    /// Turns picking on the stage on or off.
+    pub fn football_pick(&mut self, on: bool) {
+        self.football_picking = on;
+        if on {
+            self.painting = false;
+        }
+        self.request_preview();
+    }
+
+    /// A press on the stage while picking: the tracked thing under it in
+    /// the selected clip becomes the chosen one. `false` when picking is
+    /// off or the press is not on the selected clip, so the press does
+    /// what it would have.
+    fn football_pick_at(&mut self, x: f32, y: f32) -> bool {
+        if !self.football_picking {
+            return false;
+        }
+        let Some(id) = self.sole_selection() else {
+            return false;
+        };
+        let Some(clip) = self.clip(&id).cloned() else {
+            return false;
+        };
+        if !self.stage_clips().into_iter().any(|shown| shown.id == clip.id) {
+            return false;
+        }
+        let Some(request) = self.football_request(&id) else {
+            return false;
+        };
+        let Some(set) = concat_vision::football::shared(&request.dir()) else {
+            return false;
+        };
+        let [u, v] = self.stage_to_source(&clip, f64::from(x), f64::from(y));
+        let at = self.source_at_playhead(&clip);
+        self.football_chosen = set.pick(at, u as f32, v as f32).map(|tracked| tracked.id);
+        self.request_preview();
+        true
+    }
+
+    /// Puts a mark of `style` (0 shade, 1 spotlight, 2 ring, 3 erase,
+    /// 4 isolate) on the chosen track of the selected clip, or takes it
+    /// off when it is there already.
+    pub fn football_mark(&mut self, style: i32) {
+        let style = match style {
+            0 => model::MarkStyle::Shade,
+            1 => model::MarkStyle::Spotlight,
+            2 => model::MarkStyle::Ring,
+            3 => model::MarkStyle::Erase,
+            4 => model::MarkStyle::Isolate,
+            5 => model::MarkStyle::Arrow,
+            _ => model::MarkStyle::Frame,
+        };
+        let (Some(id), Some(track)) = (self.sole_selection(), self.football_chosen) else {
+            self.notify(&t("football.pickFirst"), true);
+            return;
+        };
+        let Some(clip) = self.clip(&id).cloned() else {
+            return;
+        };
+        let mut marks = clip.football.clone();
+        match marks
+            .iter()
+            .position(|mark| mark.track == track && mark.style == style)
+        {
+            Some(index) => {
+                marks.remove(index);
+            }
+            None => marks.push(model::FootballMark::new(track, style)),
+        }
+        self.apply(Command::SetClipFootball {
+            clip_id: id.clone(),
+            marks,
+        });
+        if matches!(
+            style,
+            model::MarkStyle::Shade | model::MarkStyle::Erase | model::MarkStyle::Isolate
+        ) {
+            self.ensure_football_silhouettes();
+        }
+    }
+
+    /// Takes the chosen player out of the selected clip onto a layer of his
+    /// own above it: a copy of the clip keeping only him, selected so the
+    /// stage moves him. `moving` also erases him from the clip beneath,
+    /// which is moving him; without it he is copied.
+    pub fn football_extract(&mut self, moving: bool) {
+        let (Some(id), Some(track)) = (self.sole_selection(), self.football_chosen) else {
+            self.notify(&t("football.pickFirst"), true);
+            return;
+        };
+        let Some(source) = self.clip(&id).cloned() else {
+            return;
+        };
+        if !source.kind.is_visual() || self.locked(&source.track_id) {
+            return;
+        }
+        let gesture = if moving { "football-move" } else { "football-copy" };
+        let Some(lane) = self.apply_in(Some(gesture), Command::AddTrack { bottom: false }) else {
+            return;
+        };
+        let Some(created) = self.place_copy(&source, &lane, source.start, Some(gesture)) else {
+            return;
+        };
+        // The copy carries none of the source's other marks: it is the
+        // player and nothing else.
+        self.apply_in(
+            Some(gesture),
+            Command::SetClipFootball {
+                clip_id: created.clone(),
+                marks: vec![model::FootballMark::new(track, model::MarkStyle::Isolate)],
+            },
+        );
+        if moving {
+            let mut marks = source.football.clone();
+            if !marks
+                .iter()
+                .any(|mark| mark.track == track && mark.style == model::MarkStyle::Erase)
+            {
+                marks.push(model::FootballMark::new(track, model::MarkStyle::Erase));
+            }
+            self.apply_in(
+                Some(gesture),
+                Command::SetClipFootball {
+                    clip_id: id.clone(),
+                    marks,
+                },
+            );
+        }
+        self.end_burst();
+        self.selection = vec![created];
+        self.football_picking = false;
+        self.notify(
+            &t(if moving {
+                "football.movedHint"
+            } else {
+                "football.copiedHint"
+            }),
+            false,
+        );
+        self.ensure_football_silhouettes();
+    }
+
+    /// The colours a mark can wear, as the inspector's swatches show them:
+    /// the accent, then a red, a blue, a yellow, white and an orange - two
+    /// teams' worth of kit and something for the ball.
+    const MARK_COLOURS: [[u8; 3]; 6] = [[0xcb, 0xf5, 0x3f], [0xe7, 0x4c, 0x3c], [0x3f, 0xa9, 0xf5], [0xf5, 0xd6, 0x3f], [0xff, 0xff, 0xff], [0xff, 0x8c, 0x1a]];
+
+    /// The chosen player's marks on the selected clip in the palette's
+    /// colour `index`, as one undo step.
+    pub fn football_colour(&mut self, index: i32) {
+        let (Some(id), Some(track)) = (self.sole_selection(), self.football_chosen) else {
+            return;
+        };
+        let Some(colour) = usize::try_from(index)
+            .ok()
+            .and_then(|index| Self::MARK_COLOURS.get(index).copied())
+        else {
+            return;
+        };
+        let Some(clip) = self.clip(&id).cloned() else {
+            return;
+        };
+        let marks: Vec<model::FootballMark> = clip
+            .football
+            .iter()
+            .cloned()
+            .map(|mark| {
+                if mark.track == track {
+                    model::FootballMark { colour, ..mark }
+                } else {
+                    mark
+                }
+            })
+            .collect();
+        self.apply(Command::SetClipFootball { clip_id: id, marks });
+    }
+
+    /// One knob of the chosen player's marks on the selected clip - 0 size,
+    /// 1 thickness, 2 squash, 3 strength - set on all of them at once. A
+    /// drag on the knob is one undo step, as every inspector knob is.
+    pub fn football_param(&mut self, which: i32, value: f32) {
+        let (Some(id), Some(track)) = (self.sole_selection(), self.football_chosen) else {
+            return;
+        };
+        let Some(clip) = self.clip(&id).cloned() else {
+            return;
+        };
+        let value = f64::from(value);
+        let marks: Vec<model::FootballMark> = clip
+            .football
+            .iter()
+            .cloned()
+            .map(|mut mark| {
+                if mark.track == track {
+                    match which {
+                        0 => mark.size = value,
+                        1 => mark.thickness = value,
+                        2 => mark.squash = value,
+                        _ => mark.strength = value,
+                    }
+                }
+                mark
+            })
+            .collect();
+        if marks == clip.football {
+            return;
+        }
+        let gesture = format!("football-knob-{which}");
+        self.apply_in(Some(&gesture), Command::SetClipFootball { clip_id: id, marks });
+    }
+
+    /// Takes every football mark off the selected clip.
+    pub fn football_clear(&mut self) {
+        let Some(id) = self.sole_selection() else {
+            return;
+        };
+        if self.clip(&id).is_some_and(|clip| !clip.football.is_empty()) {
+            self.apply(Command::SetClipFootball {
+                clip_id: id,
+                marks: Vec::new(),
+            });
+        }
+    }
+
+    /// Starts reading the next silhouette a mark on the active timeline
+    /// needs and does not have, unless a football job is running. Called
+    /// after every change and again when a job finishes, so a mark put on
+    /// while another player's silhouette was being read gets its turn - the
+    /// way `ensure_cutouts` queues the cutout analyses. Each player is tried
+    /// once per analysis: one the brush model cannot read stays on its box
+    /// rather than being read over and over.
+    pub fn ensure_football_silhouettes(&mut self) {
+        if self.football_job.is_some() || self.host.footballs.is_busy() {
+            return;
+        }
+        let needs = |style: model::MarkStyle| {
+            matches!(
+                style,
+                model::MarkStyle::Shade | model::MarkStyle::Erase | model::MarkStyle::Isolate
+            )
+        };
+        let marked: Vec<(String, Vec<u32>)> = self
+            .timeline()
+            .clips
+            .iter()
+            .filter(|clip| clip.football.iter().any(|mark| needs(mark.style)))
+            .map(|clip| {
+                let tracks = clip
+                    .football
+                    .iter()
+                    .filter(|mark| needs(mark.style))
+                    .map(|mark| mark.track)
+                    .collect();
+                (clip.id.clone(), tracks)
+            })
+            .collect();
+        for (id, tracks) in marked {
+            let Some(request) = self.football_request(&id) else {
+                continue;
+            };
+            if !request.analysed() {
+                continue;
+            }
+            let dir = request.dir();
+            let wanted = tracks.into_iter().find(|track| {
+                !self
+                    .football_tried
+                    .contains(&(request.media_path.clone(), *track))
+                    && concat_vision::football::silhouettes(&dir, *track).is_empty()
+            });
+            if let Some(track) = wanted {
+                self.football_tried.insert((request.media_path.clone(), track));
+                self.football_silhouettes(id, track);
+                return;
+            }
+        }
+    }
+
+    /// Reads track `track`'s silhouettes in clip `id`'s footage, unless a
+    /// football job is running; the marks use its box until they arrive.
+    fn football_silhouettes(&mut self, id: String, track: u32) {
+        if self.football_job.is_some() || self.host.footballs.is_busy() {
+            return;
+        }
+        let Some(request) = self.football_request(&id) else {
+            return;
+        };
+        self.football_job = Some(("silhouettes".to_owned(), id, 0.0));
+        let footballs = Arc::clone(&self.host.footballs);
+        let epoch = crate::host::project_epoch();
+        spawn_in_project(
+            move || {
+                let mut last = -1.0f32;
+                footballs.silhouettes(&request, track, &mut |progress| {
+                    let now = match progress {
+                        concat_host::cutout::Progress::Fetching { received, total } => {
+                            received as f32 / total.max(1) as f32
+                        }
+                        concat_host::cutout::Progress::Analysing(fraction) => fraction,
+                    };
+                    if (now - last).abs() >= 0.01 {
+                        last = now;
+                        on_ui_in_project(epoch, move |studio, _, _| {
+                            if let Some(job) = studio.football_job.as_mut() {
+                                job.2 = now;
+                            }
+                        });
+                    }
+                })
+            },
+            |studio, _, _, result| {
+                studio.football_job = None;
+                match result {
+                    Ok(_) => studio.request_preview(),
+                    Err(error) if error.contains("cancelled") => {}
+                    Err(error) => studio.notify(&tf("football.failed", &[&error]), true),
+                }
+                studio.ensure_football_silhouettes();
             },
         );
     }
@@ -6333,6 +8113,9 @@ impl Studio {
     /// 1000 × 1000 viewbox, the line's width as a fraction of the stage,
     /// and whether it is taking away. Empty between strokes.
     fn stroke_overlay(&self) -> (String, f32, bool) {
+        if let Some(drawing) = self.draw_overlay() {
+            return drawing;
+        }
         let Gesture::Paint {
             clip,
             tool,
@@ -6628,6 +8411,13 @@ impl Studio {
     /// media. The engine command splits the clip, inserts the hold, and
     /// ripples the rest of the lane.
     pub fn freeze_at_playhead(&mut self) {
+        self.freeze_for(1.0);
+    }
+
+    /// Freezes the picture under the playhead for `duration` seconds and
+    /// selects the still; see `freeze_at_playhead`. The still's id, when
+    /// one was made.
+    pub fn freeze_for(&mut self, duration: f64) -> Option<String> {
         let at = f64::from(self.playhead);
         let edge = f64::from(MIN_DURATION);
         let target = self
@@ -6642,9 +8432,10 @@ impl Studio {
                     && at < clip.start + clip.duration - edge
             });
         let Some(clip) = target else {
-            self.notify("Park the playhead inside a picture clip to freeze", true);
-            return;
+            self.notify(&t("draw.parkToFreeze"), true);
+            return None;
         };
+        let source_clip = clip.clone();
 
         let still = if clip.kind == model::ClipKind::Video {
             let Some(media) = self
@@ -6653,10 +8444,10 @@ impl Studio {
                 .iter()
                 .find(|item| item.id == clip.media_id)
             else {
-                return;
+                return None;
             };
             let Some(session) = self.session.as_ref() else {
-                return;
+                return None;
             };
             let project_path = session.path().to_owned();
             let source_time = clip.source_start + (at - clip.start) * clip.speed;
@@ -6664,14 +8455,14 @@ impl Studio {
                 Ok(frame) => frame,
                 Err(error) => {
                     self.notify(&error, true);
-                    return;
+                    return None;
                 }
             };
             let bytes = match jpeg(&frame, 4) {
                 Ok(bytes) => bytes,
                 Err(error) => {
                     self.notify(&format!("{error}"), true);
-                    return;
+                    return None;
                 }
             };
             let key = format!(
@@ -6681,14 +8472,14 @@ impl Studio {
             );
             if let Err(error) = media::write_artwork(&project_path, &key, &bytes) {
                 self.notify(&error, true);
-                return;
+                return None;
             }
             let path = format!("{project_path}/cache/{key}");
             match media::probe(&path) {
                 Ok(summary) => Some(summary.to_new_media()),
                 Err(error) => {
                     self.notify(&error, true);
-                    return;
+                    return None;
                 }
             }
         } else {
@@ -6698,11 +8489,45 @@ impl Studio {
         let created = self.apply(Command::FreezeFrame {
             clip_id: clip.id,
             time: at,
-            duration: Some(1.0),
+            duration: Some(duration),
             still,
         });
-        if let Some(id) = created {
-            self.selection = vec![id];
+        if let Some(id) = created.as_ref() {
+            self.selection = vec![id.clone()];
+            self.carry_players_onto(&source_clip, at, id);
+        }
+        created
+    }
+
+    /// The players the football analysis found in `source` at timeline
+    /// instant `at`, written as the analysis of the still `still` was
+    /// frozen from it: one instant, which a still holds at every time, so
+    /// a drawing or a mark on the frozen frame can still keep to a player.
+    fn carry_players_onto(&self, source: &Clip, at: f64, still: &str) {
+        let Some(from) = self.football_request(&source.id) else {
+            return;
+        };
+        let Some(set) = concat_vision::football::shared(&from.dir()) else {
+            return;
+        };
+        let Some(to) = self.football_request(still) else {
+            return;
+        };
+        if to.media_path == from.media_path {
+            return;
+        }
+        let seconds = source.source_start + (at - source.start) * source.speed;
+        let frozen = concat_vision::football::TrackSet {
+            version: set.version,
+            model: set.model.clone(),
+            aspect: set.aspect,
+            samples: vec![concat_vision::football::Sample {
+                ms: 0,
+                boxes: set.at(seconds),
+            }],
+        };
+        if let Err(error) = frozen.save(&to.dir()) {
+            log::warn!("football: could not carry the players onto the still: {error}");
         }
     }
 
@@ -7895,6 +9720,10 @@ impl Studio {
         editor.set_timeline_current_tab(active as i32);
         editor.set_playhead(self.playhead);
         sync(&models.key_marks, self.key_marks());
+        sync(&models.play_marks, self.montage_marks());
+        self.publish_tagging(&editor, models);
+        editor.set_mark_in(self.mark_in.unwrap_or(-1.0));
+        editor.set_mark_out(self.mark_out.unwrap_or(-1.0));
         editor.set_scroll_left(self.lanes.scroll_left);
         editor.set_seconds_per_pixel(self.lanes.seconds_per_pixel);
         editor.set_duration_seconds(self.duration());
@@ -9066,6 +10895,61 @@ impl Studio {
             cutout_progress: analysis.map(|(_, fraction)| fraction).unwrap_or(-1.0),
             cutout_fetching: analysis.is_some_and(|(fetching, _)| fetching),
             cutout_empty: self.cutout_empty(clip),
+            football_analysed: self.football_analysed(&clip.id),
+            football_progress: self
+                .football_job
+                .as_ref()
+                .filter(|(_, id, _)| *id == clip.id)
+                .map(|(_, _, fraction)| *fraction)
+                .unwrap_or(-1.0),
+            football_silhouettes: self
+                .football_job
+                .as_ref()
+                .is_some_and(|(what, id, _)| *id == clip.id && what == "silhouettes"),
+            football_picking: self.football_picking,
+            football_chosen: self.football_chosen.map_or(-1, |id| id as i32),
+            football_ball: self.football_chosen == Some(concat_vision::football::BALL),
+            football_shade: self.football_marked(clip, model::MarkStyle::Shade),
+            football_spotlight: self.football_marked(clip, model::MarkStyle::Spotlight),
+            football_ring: self.football_marked(clip, model::MarkStyle::Ring),
+            football_erase: self.football_marked(clip, model::MarkStyle::Erase),
+            football_isolate: self.football_marked(clip, model::MarkStyle::Isolate),
+            football_marks: clip.football.len() as i32,
+            draw_tool: self.draw_tool.map_or(-1, |index| index as i32),
+            draw_dashed: self.draw_style.dashed,
+            draw_thickness: self.draw_style.thickness as f32,
+            draw_hold: self.draw_style.hold as f32,
+            draw_reveal: self.draw_style.reveal as f32,
+            draw_bend: self.draw_style.bend as f32,
+            draw_freeze: self.draw_style.freeze as f32,
+            draw_colour: Self::MARK_COLOURS
+                .iter()
+                .position(|colour| *colour == self.draw_style.colour)
+                .map_or(-1, |index| index as i32),
+            drawings: clip.drawings.len() as i32,
+            draw_points: self
+                .draw_draft
+                .as_ref()
+                .filter(|(id, _, _)| *id == clip.id)
+                .map_or(0, |(_, anchors, _)| anchors.len() as i32),
+            football_arrow: self.football_marked(clip, model::MarkStyle::Arrow),
+            football_frame: self.football_marked(clip, model::MarkStyle::Frame),
+            football_marks_here: self
+                .football_chosen
+                .map_or(0, |track| clip.football.iter().filter(|mark| mark.track == track).count())
+                as i32,
+            football_size: self.football_knob(clip, |mark| mark.size),
+            football_thickness: self.football_knob(clip, |mark| mark.thickness),
+            football_squash: self.football_knob(clip, |mark| mark.squash),
+            football_strength: self
+                .football_chosen
+                .and_then(|track| clip.football.iter().find(|mark| mark.track == track))
+                .map_or(0.8, |mark| mark.strength as f32),
+            football_colour: self
+                .football_chosen
+                .and_then(|track| clip.football.iter().find(|mark| mark.track == track))
+                .and_then(|mark| Self::MARK_COLOURS.iter().position(|c| *c == mark.colour))
+                .map_or(-1, |index| index as i32),
             enhance_progress: self
                 .enhance_jobs
                 .get(&clip.id)
@@ -9080,6 +10964,22 @@ impl Studio {
             enhance_on: clip.enhanced.as_ref().is_some_and(|link| link.on)
                 || self.enhance_jobs.contains_key(&clip.id),
         }
+    }
+
+    /// A knob of the chosen track's first mark on `clip`, or its default.
+    fn football_knob(&self, clip: &Clip, knob: impl Fn(&model::FootballMark) -> f64) -> f32 {
+        self.football_chosen
+            .and_then(|track| clip.football.iter().find(|mark| mark.track == track))
+            .map_or(1.0, |mark| knob(mark) as f32)
+    }
+
+    /// Whether the chosen track wears a mark of `style` on `clip`.
+    fn football_marked(&self, clip: &Clip, style: model::MarkStyle) -> bool {
+        self.football_chosen.is_some_and(|track| {
+            clip.football
+                .iter()
+                .any(|mark| mark.track == track && mark.style == style)
+        })
     }
 
     /// The source instant of `clip` under the playhead, held to the clip.
@@ -10002,6 +11902,7 @@ impl Studio {
                 ),
                 row("end", t("common.goToEnd"), Glyph::SkipForward, "End", true),
             ],
+            3 => self.montage_menu(),
             _ => Vec::new(),
         }
     }
@@ -10292,6 +12193,11 @@ impl Studio {
                     });
                 }
                 self.menu_target = None;
+            }
+            // Q W I O X E R P [ ]: the Montage menu's keys.
+            "delete-left" | "delete-right" | "mark-in" | "mark-out" | "clear-marks"
+            | "extract" | "lift" | "play-add" | "play-prev" | "play-next" => {
+                self.montage_action(action)
             }
             _ => {}
         }

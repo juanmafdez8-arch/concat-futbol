@@ -246,6 +246,20 @@ export component TitleBar inherits Rectangle {
             }
         }
 
+        if !root.minimal: montage := MenuLabel {
+            label: I18n.t("titleBar.montage");
+            current: root.menu == 3;
+            clicked => {
+                root.menu-opened(3, montage.absolute-position.x - root.absolute-position.x, false);
+            }
+            property <int> asked: root.keyboard-token;
+            changed asked => {
+                if (root.keyboard-menu == 3) {
+                    root.menu-opened(3, montage.absolute-position.x - root.absolute-position.x, true);
+                }
+            }
+        }
+
         Rectangle { horizontal-stretch: 1; }
 
         // Beside Settings, because it is the same sort of thing: neither one

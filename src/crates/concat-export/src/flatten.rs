@@ -141,6 +141,18 @@ pub fn flatten_timeline_in(
                     }
                     _ => String::new(),
                 },
+                football: clip.football.clone(),
+                drawings: clip.drawings.clone(),
+                football_dir: match project_dir {
+                    // Always named, so the monitor can outline the tracks
+                    // while a player is picked on a clip with no marks yet.
+                    Some(dir) => {
+                        concat_vision::football::football_dir(dir, &media.path)
+                            .to_string_lossy()
+                            .into_owned()
+                    }
+                    _ => String::new(),
+                },
                 ..ExportClip::blank(kind, clip.start, clip.duration, index)
             })
         })

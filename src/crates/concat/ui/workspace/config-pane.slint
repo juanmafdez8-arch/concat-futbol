@@ -203,6 +203,31 @@ export component ConfigPane inherits Rectangle {
     callback cutout-painting(on: bool);
     callback cutout-subject(index: int);
     callback cutout-clear();
+    /// Football: find the players and the ball, pick one on the monitor,
+    /// mark it (0 shade, 1 spotlight, 2 ring, 3 erase, 4 isolate), lift it
+    /// onto a layer of its own (moving it, or copying it), clear the marks.
+    callback football-analyse();
+    callback football-pick(on: bool);
+    callback football-mark(style: int);
+    callback football-extract(moving: bool);
+    callback football-clear();
+    /// The chosen player's marks in a colour of the palette, by index.
+    callback football-colour(index: int);
+    /// One of the chosen player's marks' knobs: 0 size, 1 thickness,
+    /// 2 squash, 3 strength.
+    callback football-param(which: int, value: float);
+    /// Telestration: the tool (0 line, 1 arrow, 2 curve, 3 zone, 4 link;
+    /// the same again puts it away), its style (0 dashed, 1 thickness,
+    /// 2 hold, 3 reveal, 4 bend), its colour, and finishing, undoing and
+    /// clearing the drawings.
+    callback draw-tool(index: int);
+    callback draw-option(which: int, value: float);
+    callback draw-colour(index: int);
+    callback draw-finish();
+    callback draw-undo();
+    callback draw-clear();
+    /// Freeze the picture at the playhead and draw on it in sequence.
+    callback draw-freeze();
     /// The Enhance switch: start it, or show the copy or the original.
     callback clip-enhance-set(on: bool);
     callback transition-remove();
@@ -626,6 +651,20 @@ export component ConfigPane inherits Rectangle {
                         cutout-painting(on) => { root.cutout-painting(on); }
                         cutout-subject(index) => { root.cutout-subject(index); }
                         cutout-clear => { root.cutout-clear(); }
+                        football-analyse => { root.football-analyse(); }
+                        football-pick(on) => { root.football-pick(on); }
+                        football-mark(style) => { root.football-mark(style); }
+                        football-extract(moving) => { root.football-extract(moving); }
+                        football-clear => { root.football-clear(); }
+                        football-colour(index) => { root.football-colour(index); }
+                        football-param(which, value) => { root.football-param(which, value); }
+                        draw-tool(index) => { root.draw-tool(index); }
+                        draw-option(which, value) => { root.draw-option(which, value); }
+                        draw-colour(index) => { root.draw-colour(index); }
+                        draw-finish => { root.draw-finish(); }
+                        draw-undo => { root.draw-undo(); }
+                        draw-clear => { root.draw-clear(); }
+                        draw-freeze => { root.draw-freeze(); }
                     }
 
                     if !root.is-image && !root.is-shape: SpeedPanel {

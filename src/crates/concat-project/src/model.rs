@@ -471,6 +471,201 @@ impl Subject {
     }
 }
 
+/// A mark on one tracked thing in football footage: a player, a keeper, a
+/// referee or the ball, found by the football analysis of the clip's media
+/// and followed along it. The track is the analysis's id for that thing,
+/// so the mark moves with it frame by frame.
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FootballMark {
+    /// The analysis's id for the thing marked.
+    pub track: u32,
+    /// What the mark does to it.
+    pub style: MarkStyle,
+    /// The mark's colour, as RGB.
+    #[serde(default = "default_mark_colour")]
+    pub colour: [u8; 3],
+    /// How strongly the mark is drawn, `0..=1`.
+    #[serde(default = "default_mark_strength")]
+    pub strength: f64,
+    /// How big the mark is against its own default, `0.25..=4`: the ring's
+    /// and the pool's width, the arrow's and the frame's size, how far an
+    /// erased hole reaches past the player.
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub size: f64,
+    /// How heavy the mark's line is against its default, `0.25..=4`: the
+    /// ring's band and the frame's border.
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub thickness: f64,
+    /// How tall the round marks are against their default, `0.25..=4`:
+    /// under 1 flattens the ring and the pool further onto the pitch, over
+    /// 1 stands them up, for a camera higher or lower than a broadcast
+    /// gantry. The arrow's length too.
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub squash: f64,
+}
+
+fn one() -> f64 {
+    1.0
+}
+
+fn is_one(value: &f64) -> bool {
+    (*value - 1.0).abs() < 1e-9
+}
+
+/// The least and most a mark's size, thickness and squash may be.
+pub const MARK_SCALE: (f64, f64) = (0.25, 4.0);
+
+/// What a football mark does to the thing it marks.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MarkStyle {
+    /// Its silhouette tinted in the mark's colour.
+    Shade,
+    /// The picture darkened around it, so the eye goes to it.
+    Spotlight,
+    /// A ring on the grass at its feet.
+    Ring,
+    /// Taken out of the picture, the hole filled from what surrounds it.
+    Erase,
+    /// Everything but it taken away: the layer a moved or pasted player is.
+    Isolate,
+    /// An arrow over its head, pointing down at it.
+    Arrow,
+    /// A frame drawn round it.
+    Frame,
+}
+
+fn default_mark_colour() -> [u8; 3] {
+    [0xcb, 0xf5, 0x3f]
+}
+
+fn default_mark_strength() -> f64 {
+    0.8
+}
+
+impl FootballMark {
+    /// A mark of `style` on `track` in the default colour and strength.
+    pub fn new(track: u32, style: MarkStyle) -> FootballMark {
+        FootballMark {
+            track,
+            style,
+            colour: default_mark_colour(),
+            strength: default_mark_strength(),
+            size: 1.0,
+            thickness: 1.0,
+            squash: 1.0,
+        }
+    }
+
+    /// The strength and the shape held to their ranges.
+    pub fn tidy(mut self) -> FootballMark {
+        self.strength = if self.strength.is_finite() {
+            self.strength.clamp(0.0, 1.0)
+        } else {
+            default_mark_strength()
+        };
+        let (least, most) = MARK_SCALE;
+        for value in [&mut self.size, &mut self.thickness, &mut self.squash] {
+            *value = if value.is_finite() {
+                value.clamp(least, most)
+            } else {
+                1.0
+            };
+        }
+        self
+    }
+}
+
+/// A tactical drawing on a clip, the way an analyst telestrates a play: a
+/// line, an arrow, a curved run, a zone on the grass, or a line joining
+/// players. Each point is a place on the source picture, or a player the
+/// football analysis follows, so a line drawn from a defender keeps to
+/// his feet as he moves.
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Drawing {
+    /// What is drawn through the points.
+    pub kind: DrawKind,
+    /// The points, in drawing order.
+    pub points: Vec<Anchor>,
+    /// Drawn in dashes rather than a solid line.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub dashed: bool,
+    /// The line's colour, as RGB.
+    #[serde(default = "default_drawing_colour")]
+    pub colour: [u8; 3],
+    /// How heavy the line is against its default, `0.25..=4`.
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub thickness: f64,
+    /// How far a curve bows out, as a fraction of its length, either side.
+    #[serde(default = "default_bend")]
+    pub bend: f64,
+    /// When it appears, in seconds from the clip's start on the timeline.
+    pub start: f64,
+    /// How long it stays, in seconds.
+    pub hold: f64,
+    /// How long it takes to draw itself on, in seconds; zero is at once.
+    #[serde(default)]
+    pub reveal: f64,
+}
+
+/// What a drawing draws through its points.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DrawKind {
+    /// A straight line from the first point to the last.
+    Line,
+    /// A straight line with an arrowhead at its end: a pass, a run.
+    Arrow,
+    /// A bowed arrow from the first point to the last: a curled run.
+    Curve,
+    /// A closed area, filled faintly: a zone, a space to attack.
+    Zone,
+    /// A line through every point, a dot at each: a back line, a press.
+    Link,
+}
+
+/// A point of a drawing: a place on the source picture, or a player.
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Anchor {
+    /// Where, as source fractions; for a player, where he stood when the
+    /// point was placed, used while he is out of sight.
+    pub at: [f64; 2],
+    /// The football analysis's id for the player whose feet the point
+    /// keeps to, if it was placed on one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub track: Option<u32>,
+}
+
+fn default_drawing_colour() -> [u8; 3] {
+    [0xff, 0xd4, 0x00]
+}
+
+fn default_bend() -> f64 {
+    0.25
+}
+
+impl Drawing {
+    /// Times, scale and points held to their ranges; `None` for a drawing
+    /// with too few points to draw anything.
+    pub fn tidy(mut self) -> Option<Drawing> {
+        let finite = |value: f64, fallback: f64| if value.is_finite() { value } else { fallback };
+        self.start = finite(self.start, 0.0).clamp(0.0, ranges::MAX_TIME);
+        self.hold = finite(self.hold, 4.0).clamp(0.05, ranges::MAX_TIME);
+        self.reveal = finite(self.reveal, 0.0).clamp(0.0, self.hold);
+        self.thickness = finite(self.thickness, 1.0).clamp(MARK_SCALE.0, MARK_SCALE.1);
+        self.bend = finite(self.bend, default_bend()).clamp(-1.0, 1.0);
+        self.points.retain(|anchor| anchor.at.iter().all(|value| value.is_finite()));
+        let least = match self.kind {
+            DrawKind::Zone => 3,
+            _ => 2,
+        };
+        (self.points.len() >= least).then_some(self)
+    }
+}
+
 /// One brush stroke over a cutout: which tool, how wide, and where it went.
 /// Points are fractions of the source picture, `(0, 0)` its top-left, so a
 /// stroke survives a change of output size, a crop or a flip.
@@ -1323,6 +1518,14 @@ pub struct Clip {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(deserialize_with = "wire::maybe")]
     pub cutout: Option<Cutout>,
+    /// Marks on tracked players and the ball; see [`FootballMark`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(deserialize_with = "wire::list")]
+    pub football: Vec<FootballMark>,
+    /// Tactical drawings over the picture; see [`Drawing`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(deserialize_with = "wire::list")]
+    pub drawings: Vec<Drawing>,
     /// Keep voices at their natural pitch when `speed` is not 1. On by
     /// default; off gives the tape-machine chipmunk/slow-motion sound.
     pub preserve_pitch: bool,
@@ -1452,6 +1655,8 @@ impl Clip {
             blend: String::new(),
             crop: None,
             cutout: None,
+            football: Vec::new(),
+            drawings: Vec::new(),
             filters: Vec::new(),
             video_effects: Vec::new(),
             audio_stream: None,
@@ -1507,6 +1712,14 @@ impl Clip {
             .map(Crop::tidy)
             .filter(|crop| !crop.is_none());
         self.cutout = self.cutout.take().map(Cutout::tidy);
+        self.football = std::mem::take(&mut self.football)
+            .into_iter()
+            .map(FootballMark::tidy)
+            .collect();
+        self.drawings = std::mem::take(&mut self.drawings)
+            .into_iter()
+            .filter_map(Drawing::tidy)
+            .collect();
         if let Some(transition) = self.transition_in.as_mut() {
             transition.duration = finite(transition.duration, 1.0).max(MIN_TRANSITION);
         }
@@ -1785,6 +1998,170 @@ impl Clip {
     }
 }
 
+/// The tagging template, the way Nacsport has it: the categories an
+/// analyst tags plays with - each a button with a colour, a key, and how
+/// far before and after the press its register reaches - and the
+/// descriptors that qualify a register once it is made.
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TagTemplate {
+    /// The category buttons, in the panel's order. The first nine answer
+    /// to the keys 1 to 9.
+    pub categories: Vec<TagCategory>,
+    /// The descriptors, in the panel's order.
+    #[serde(default)]
+    pub descriptors: Vec<String>,
+}
+
+/// One category button of a tagging template.
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TagCategory {
+    /// What its registers are called.
+    pub name: String,
+    /// Its colour, as RGB.
+    pub colour: [u8; 3],
+    /// Seconds before the press its register starts.
+    #[serde(default = "default_lead")]
+    pub lead: f64,
+    /// Seconds after the press its register ends.
+    #[serde(default = "default_lag")]
+    pub lag: f64,
+}
+
+fn default_lead() -> f64 {
+    6.0
+}
+
+fn default_lag() -> f64 {
+    3.0
+}
+
+impl TagCategory {
+    /// A category with the default reach either side.
+    pub fn new(name: &str, colour: [u8; 3]) -> TagCategory {
+        TagCategory {
+            name: name.to_owned(),
+            colour,
+            lead: default_lead(),
+            lag: default_lag(),
+        }
+    }
+}
+
+impl TagTemplate {
+    /// The template a project starts with: the phases and moments a
+    /// tactical-periodization analyst tags a match by, and where on the
+    /// pitch and how each ended.
+    pub fn football() -> TagTemplate {
+        let categories = [
+            ("Ataque organizado", [0x34, 0x98, 0xdb]),
+            ("Transición ofensiva", [0x2e, 0xcc, 0x71]),
+            ("Defensa organizada", [0x9b, 0x59, 0xb6]),
+            ("Transición defensiva", [0xe6, 0x7e, 0x22]),
+            ("Balón parado a favor", [0x1a, 0xbc, 0x9c]),
+            ("Balón parado en contra", [0xe7, 0x4c, 0x3c]),
+            ("Ocasión", [0xf1, 0xc4, 0x0f]),
+            ("Gol", [0xcb, 0xf5, 0x3f]),
+            ("Error", [0x95, 0xa5, 0xa6]),
+        ]
+        .into_iter()
+        .map(|(name, colour)| TagCategory::new(name, colour))
+        .collect();
+        let descriptors = [
+            "Carril izquierdo",
+            "Carril central",
+            "Carril derecho",
+            "Éxito",
+            "Fallo",
+            "1ª parte",
+            "2ª parte",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        TagTemplate {
+            categories,
+            descriptors,
+        }
+    }
+
+    /// Names trimmed and unique, empty ones dropped, reaches held to a
+    /// minute either side.
+    pub fn tidy(mut self) -> TagTemplate {
+        let mut seen = std::collections::HashSet::new();
+        self.categories = self
+            .categories
+            .into_iter()
+            .filter_map(|mut category| {
+                category.name = category.name.trim().to_owned();
+                let finite = |value: f64, fallback: f64| if value.is_finite() { value } else { fallback };
+                category.lead = finite(category.lead, default_lead()).clamp(0.0, 60.0);
+                category.lag = finite(category.lag, default_lag()).clamp(0.0, 60.0);
+                (!category.name.is_empty() && seen.insert(category.name.clone())).then_some(category)
+            })
+            .collect();
+        let mut seen = std::collections::HashSet::new();
+        self.descriptors = self
+            .descriptors
+            .into_iter()
+            .map(|name| name.trim().to_owned())
+            .filter(|name| !name.is_empty() && seen.insert(name.clone()))
+            .collect();
+        self
+    }
+}
+
+/// A play marked on a timeline: a stretch of it with a name and a tag -
+/// a goal, a chance, a press - that the highlights are cut from. Times are
+/// timeline seconds, so a play stays where it was marked whatever clips
+/// come and go under it.
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Play {
+    /// Minted by the editor ("p1", ...), for a command to name it by.
+    pub id: String,
+    /// What the play is called on the ruler and in the menu.
+    pub name: String,
+    /// What kind of play it is: "goal", "chance", "press", "attack",
+    /// "defence", "setPiece", "error" or "other". Free text, so a tag the
+    /// build does not know survives a round trip.
+    #[serde(default)]
+    pub tag: String,
+    /// Where it begins, in timeline seconds.
+    pub start: f64,
+    /// Where it ends, in timeline seconds.
+    pub end: f64,
+    /// The descriptors that qualify it - where on the pitch, how it
+    /// ended - from the tagging template.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub descriptors: Vec<String>,
+    /// How good it was, 1 to 5; 0 is unrated.
+    #[serde(default, skip_serializing_if = "is_zero_rating")]
+    pub rating: u8,
+}
+
+fn is_zero_rating(rating: &u8) -> bool {
+    *rating == 0
+}
+
+impl Play {
+    /// The times held to the timeline and in order; `None` for a play with
+    /// no length left.
+    pub fn tidy(mut self) -> Option<Play> {
+        if !self.start.is_finite() || !self.end.is_finite() {
+            return None;
+        }
+        let (start, end) = (self.start.min(self.end), self.start.max(self.end));
+        self.start = start.clamp(0.0, ranges::MAX_TIME);
+        self.end = end.clamp(0.0, ranges::MAX_TIME);
+        self.rating = self.rating.min(5);
+        self.descriptors.sort();
+        self.descriptors.dedup();
+        (self.end - self.start > 1e-3).then_some(self)
+    }
+}
+
 /// One timeline: a name and its lanes and clips. Every operation takes the
 /// project and works on whichever timeline is active.
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
@@ -1813,6 +2190,10 @@ pub struct Timeline {
     /// [`Timeline::clip_mut`]). Reading through the `Arc` is transparent.
     #[serde(deserialize_with = "wire::list")]
     pub clips: Vec<Arc<Clip>>,
+    /// The plays marked on it, in the order they were marked; see [`Play`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(deserialize_with = "wire::list")]
+    pub plays: Vec<Play>,
     /// Fields this build does not know, kept so they round-trip.
     #[serde(flatten, default, skip_serializing_if = "Map::is_empty")]
     pub extra: Map<String, Value>,
@@ -1826,6 +2207,7 @@ impl Default for Timeline {
             video: VideoSettings::default(),
             tracks: Vec::new(),
             clips: Vec::new(),
+            plays: Vec::new(),
             extra: Map::new(),
         }
     }
@@ -2002,6 +2384,10 @@ pub struct Project {
     /// to the first timeline if it somehow does not.
     #[serde(default)]
     pub active_timeline_id: String,
+    /// The tagging template the plays are marked with; absent until it is
+    /// first changed, which reads as [`TagTemplate::football`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tagging: Option<TagTemplate>,
     /// Top-level fields this build does not know, kept so they round-trip.
     #[serde(flatten, default, skip_serializing_if = "Map::is_empty")]
     pub extra: Map<String, Value>,
@@ -2042,10 +2428,18 @@ impl Project {
                     })
                     .collect(),
                 clips: Vec::new(),
+                plays: Vec::new(),
                 extra: Map::new(),
             })],
             active_timeline_id: "TL1".to_owned(),
+            tagging: None,
         }
+    }
+
+    /// The tagging template in force: the project's, or the football one
+    /// it starts with.
+    pub fn tag_template(&self) -> TagTemplate {
+        self.tagging.clone().unwrap_or_else(TagTemplate::football)
     }
 
     /// The timeline being edited. The active id is maintained by the command

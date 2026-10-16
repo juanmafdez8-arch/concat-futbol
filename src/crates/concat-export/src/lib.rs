@@ -22,6 +22,7 @@
 
 pub mod chains;
 pub mod flatten;
+mod football;
 mod resolve;
 
 use resolve::{BuiltTimeline, TransitionSpan, Treatment, animation_of, build_timeline, quantise};
@@ -42,7 +43,7 @@ use concat_media::audio::{self, AudioClip};
 use concat_media::{
     DecodeOptions, Decoder, EncodeOptions, Encoder, FrameSink, FrameSource, RateMode, VideoCodec,
 };
-use concat_project::model::{AppliedFilter, ColorSpace, Cutout};
+use concat_project::model::{AppliedFilter, ColorSpace, Cutout, Drawing, FootballMark};
 use concat_render::{
     Compositor, FramePlan, PlannedLayer, PlannedTreatment, Transition, WgpuCompositor, plan_frame,
 };
@@ -212,6 +213,24 @@ pub struct ExportClip {
     /// - or empty when the flattener had no project folder to name it by.
     #[serde(default)]
     pub mask_dir: String,
+    /// Marks on tracked players and the ball, as the document holds them.
+    /// Drawn only with `football_dir`.
+    #[serde(default)]
+    pub football: Vec<FootballMark>,
+    /// Where this clip's media has its football analysis - see
+    /// `concat_vision::football::football_dir` - or empty.
+    #[serde(default)]
+    pub football_dir: String,
+    /// Outline every tracked box: the view while a player is being picked
+    /// on the monitor. Preview only.
+    #[serde(default)]
+    pub football_picking: bool,
+    /// The track drawn as chosen while picking.
+    #[serde(default)]
+    pub football_chosen: Option<u32>,
+    /// Tactical drawings over the picture, as the document holds them.
+    #[serde(default)]
+    pub drawings: Vec<Drawing>,
     /// A title's per-word reveal order, baked at rasterize time and set by
     /// the host - never by the wire format, like `transition_chain`. Every
     /// shader pass over this clip carries it, so a reveal effect can read
@@ -266,6 +285,11 @@ impl ExportClip {
             has_audio: None,
             cutout: None,
             mask_dir: String::new(),
+            football: Vec::new(),
+            football_dir: String::new(),
+            football_picking: false,
+            football_chosen: None,
+            drawings: Vec::new(),
             highlighted: false,
             reveal_map: None,
         }
@@ -1290,6 +1314,7 @@ fn render_picture(
         chains,
         reveal_maps,
         cutouts,
+        football,
         highlight: _,
     } = build_timeline(request, rate, visible, transitions);
 
@@ -1368,12 +1393,16 @@ fn render_picture(
                         ranges.get(&layer.clip).copied(),
                         // Deep where the frame goes to the GPU as it is: a
                         // cutout cuts eight bits.
-                        !cutouts.contains_key(&layer.clip),
+                        !cutouts.contains_key(&layer.clip) && !football.contains_key(&layer.clip),
                     )
                     .map_err(|error| error.to_string())?;
                 let frame = cutouts
                     .get(&layer.clip)
                     .and_then(|job| job.cut(&frame, layer.source_time))
+                    .map_or(frame, std::sync::Arc::new);
+                let frame = football
+                    .get(&layer.clip)
+                    .and_then(|job| job.draw(&frame, layer.source_time, time))
                     .map_or(frame, std::sync::Arc::new);
                 layers.push(filled(
                     layer,
@@ -1415,7 +1444,7 @@ fn render_picture(
                         .scaled_to(decode_width, decode_height)
                         .at_rate(decode_rate)
                         .in_range(ranges.get(&layer.clip).copied())
-                        .deep(!cutouts.contains_key(&layer.clip));
+                        .deep(!cutouts.contains_key(&layer.clip) && !football.contains_key(&layer.clip));
 
                     // A still is a one-frame stream. Without looping it would
                     // contribute a single frame and then disappear.
@@ -1440,6 +1469,13 @@ fn render_picture(
                     .and_then(|job| job.cut(&frame, layer.source_time))
                 {
                     Some(cut) => cut,
+                    None => frame,
+                };
+                let frame = match football
+                    .get(&layer.clip)
+                    .and_then(|job| job.draw(&frame, layer.source_time, time))
+                {
+                    Some(drawn) => drawn,
                     None => frame,
                 };
                 layers.push(filled(
@@ -1807,7 +1843,8 @@ fn frame_request(
         // frame is drawn at the level it was decoded at - deep, for an HDR
         // clip, unless a cutout has to cut it in eight bits.
         .at_any_size(true)
-        .deep_when_untreated(!plan.built.cutouts.contains_key(&layer.clip))
+        .deep_when_untreated(!plan.built.cutouts.contains_key(&layer.clip)
+                && !plan.built.football.contains_key(&layer.clip))
 }
 
 /// [`preview_sources`] for one instant of a plan already built. With
@@ -1832,6 +1869,7 @@ pub fn preview_sources_of(
         chains,
         reveal_maps,
         cutouts,
+        football,
         highlight,
     } = &plan.built;
     let highlight = *highlight;
@@ -1866,6 +1904,10 @@ pub fn preview_sources_of(
                     Some(drawn) => std::sync::Arc::new(drawn),
                     None => frame,
                 };
+                let frame = football
+                    .get(&layer.clip)
+                    .and_then(|job| job.draw(&frame, layer.source_time, time))
+                    .map_or(frame, std::sync::Arc::new);
                 layers.push(filled(
                     layer,
                     frame,

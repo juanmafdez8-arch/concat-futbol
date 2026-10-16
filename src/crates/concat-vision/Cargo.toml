@@ -19,6 +19,9 @@ concat-project.workspace = true
 # Masks on disk are eight-bit grey PNGs: a tenth the size of raw bytes, and
 # a file anyone can open to see what the model saw.
 png = "0.17"
+# The football analysis is kept as JSON beside the masks.
+serde = { version = "1", features = ["derive"] }
+serde_json.workspace = true
 # ONNX Runtime. The platform's accelerator is a feature per target below;
 # the CPU provider is always there behind it.
 ort = { workspace = true, optional = true }

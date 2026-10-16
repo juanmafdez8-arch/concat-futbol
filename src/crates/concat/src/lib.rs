@@ -268,6 +268,11 @@ pub fn run() -> Result<(), slint::PlatformError> {
         app.global::<KeyEditor>()
             .set_rows(ModelRc::from(models.key_editor_rows.clone()));
         editor.set_key_marks(ModelRc::from(models.key_marks.clone()));
+        editor.set_play_marks(ModelRc::from(models.play_marks.clone()));
+        editor.set_tag_buttons(ModelRc::from(models.tag_buttons.clone()));
+        editor.set_tag_chips(ModelRc::from(models.tag_chips.clone()));
+        editor.set_tag_rows(ModelRc::from(models.tag_rows.clone()));
+        editor.set_tag_filter_options(ModelRc::from(models.tag_filter_options.clone()));
         app.global::<Library>()
             .set_views(ModelRc::from(models.library_views.clone()));
         editor.set_menu_items(ModelRc::from(models.menu.clone()));
@@ -1203,6 +1208,90 @@ pub fn run() -> Result<(), slint::PlatformError> {
     editor.on_cutout_clear(on_window!(|state| {
         state.cutout_clear();
     }));
+    editor.on_football_analyse(on_window!(|state| {
+        state.football_analyse();
+    }));
+    editor.on_football_pick(on_window!(|state, on: bool| {
+        state.football_pick(on);
+    }));
+    editor.on_football_mark(on_window!(|state, style: i32| {
+        state.football_mark(style);
+    }));
+    editor.on_football_extract(on_window!(|state, moving: bool| {
+        state.football_extract(moving);
+    }));
+    editor.on_football_clear(on_window!(|state| {
+        state.football_clear();
+    }));
+    editor.on_football_colour(on_window!(|state, index: i32| {
+        state.football_colour(index);
+    }));
+    editor.on_football_param(on_window!(|state, which: i32, value: f32| {
+        state.football_param(which, value);
+    }));
+    editor.on_draw_tool(on_window!(|state, index: i32| {
+        state.draw_tool(index);
+    }));
+    editor.on_draw_option(on_window!(|state, which: i32, value: f32| {
+        state.draw_option(which, value);
+    }));
+    editor.on_draw_colour(on_window!(|state, index: i32| {
+        state.draw_colour(index);
+    }));
+    editor.on_draw_finish(on_window!(|state| {
+        state.draw_finish();
+    }));
+    editor.on_draw_undo(on_window!(|state| {
+        state.draw_undo();
+    }));
+    editor.on_draw_clear(on_window!(|state| {
+        state.draw_clear();
+    }));
+    editor.on_draw_freeze(on_window!(|state| {
+        state.draw_freeze();
+    }));
+    editor.on_tag_press(on_window!(|state, index: i32| {
+        state.tag_press(index);
+    }));
+    editor.on_tag_descriptor(on_window!(|state, index: i32| {
+        state.tag_descriptor(index);
+    }));
+    editor.on_tag_rate(on_window!(|state, stars: i32| {
+        state.tag_rate(stars);
+    }));
+    editor.on_tag_select(on_window!(|state, id: SharedString| {
+        state.tag_select(&id);
+    }));
+    editor.on_tag_delete(on_window!(|state, id: SharedString| {
+        state.tag_delete(&id);
+    }));
+    editor.on_tag_filter_category(on_window!(|state, index: i32| {
+        state.tag_filter_category(index);
+    }));
+    editor.on_tag_filter_rating(on_window!(|state, stars: i32| {
+        state.tag_filter_rating(stars);
+    }));
+    editor.on_tag_present(on_window!(|state| {
+        state.tag_present();
+    }));
+    editor.on_tag_edit(on_window!(|state, on: bool| {
+        state.tag_edit(on);
+    }));
+    editor.on_tag_category_add(on_window!(|state, name: SharedString| {
+        state.tag_category_add(&name);
+    }));
+    editor.on_tag_category_remove(on_window!(|state, index: i32| {
+        state.tag_category_remove(index);
+    }));
+    editor.on_tag_category_time(on_window!(|state, index: i32, which: i32, seconds: f32| {
+        state.tag_category_time(index, which, seconds);
+    }));
+    editor.on_tag_descriptor_add(on_window!(|state, name: SharedString| {
+        state.tag_descriptor_add(&name);
+    }));
+    editor.on_tag_descriptor_remove(on_window!(|state, index: i32| {
+        state.tag_descriptor_remove(index);
+    }));
     editor.on_clip_enhance_set(on_window!(|state, on: bool| {
         state.clip_enhance_set(on);
     }));
@@ -1672,7 +1761,8 @@ pub fn run() -> Result<(), slint::PlatformError> {
                             state.split_at(at, false);
                         }
                         "save" => state.save(true),
-                        _ => {}
+                        // The Montage menu's rows, whose ids it reads itself.
+                        other => state.montage_action(other),
                     }
                 }
                 if action == "close-window" {

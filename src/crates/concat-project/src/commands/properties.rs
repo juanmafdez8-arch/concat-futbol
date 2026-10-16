@@ -137,6 +137,32 @@ pub(super) fn apply(
             })
         }
 
+        Command::SetClipFootball { clip_id, marks } => {
+            let timeline = project.active_mut();
+            let Some(clip) = timeline.clip_mut(&clip_id) else {
+                return Ok(Outcome::default());
+            };
+            let marks: Vec<FootballMark> = marks.into_iter().map(FootballMark::tidy).collect();
+            let applied = assign(&mut clip.football, marks);
+            Ok(Outcome {
+                created_id: None,
+                applied,
+            })
+        }
+
+        Command::SetClipDrawings { clip_id, drawings } => {
+            let timeline = project.active_mut();
+            let Some(clip) = timeline.clip_mut(&clip_id) else {
+                return Ok(Outcome::default());
+            };
+            let drawings: Vec<Drawing> = drawings.into_iter().filter_map(Drawing::tidy).collect();
+            let applied = assign(&mut clip.drawings, drawings);
+            Ok(Outcome {
+                created_id: None,
+                applied,
+            })
+        }
+
         Command::AddCutoutStroke { clip_id, stroke } => {
             let timeline = project.active_mut();
             let Some(clip) = timeline.clip_mut(&clip_id) else {

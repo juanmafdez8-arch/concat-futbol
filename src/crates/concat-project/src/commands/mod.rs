@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::{
     AppliedFilter, AudioTrack, Clip, ClipKind, ColorRange, ColorSpace, Crop, CustomFont, Cutout,
-    CutoutMode, Enhanced, KeyEase, KeyProperty, MediaItem, MediaKind, MediaOrigin, Project,
+    CutoutMode, Drawing, Enhanced, FootballMark, KeyEase, Play, TagTemplate, KeyProperty, MediaItem, MediaKind, MediaOrigin, Project,
     ShapeStyle, SpeedPoint, Stroke, TextStyle, Timeline, Track, Transition, VideoSettings,
 };
 
@@ -453,6 +453,23 @@ pub enum Command {
         /// The cutout, or None to take it off.
         cutout: Option<Cutout>,
     },
+    /// Replaces a picture's football marks: the players and the ball it
+    /// shades, spotlights, rings, erases or isolates. Tidied on the way in;
+    /// see [`FootballMark::tidy`].
+    SetClipFootball {
+        /// The clip. An unknown id is a no-op.
+        clip_id: String,
+        /// The marks, in the order they are drawn.
+        marks: Vec<FootballMark>,
+    },
+    /// Replaces a picture's tactical drawings. Each is tidied on the way
+    /// in; one with too few points is dropped. See [`Drawing::tidy`].
+    SetClipDrawings {
+        /// The clip. An unknown id is a no-op.
+        clip_id: String,
+        /// The drawings, in the order they are drawn.
+        drawings: Vec<Drawing>,
+    },
     /// Paints one stroke onto a clip's cutout. A clip with no cutout gets a
     /// custom one; an automatic cutout becomes custom, since a stroke is a
     /// correction to it. A stroke with no points is a no-op.
@@ -674,6 +691,20 @@ pub enum Command {
         timeline_id: String,
         /// The new tab label; trimmed before it lands.
         name: String,
+    },
+    /// Replaces the project's tagging template: the category buttons and
+    /// the descriptors plays are marked with. Tidied on the way in; see
+    /// [`TagTemplate::tidy`].
+    SetTagTemplate {
+        /// The template.
+        template: TagTemplate,
+    },
+    /// Replaces the active timeline's plays: the stretches marked as a
+    /// goal, a chance, a press, that the highlights are cut from. Each is
+    /// tidied on the way in; one with no length left is dropped.
+    SetPlays {
+        /// The plays, in the order they were marked.
+        plays: Vec<Play>,
     },
     /// Switches which timeline subsequent commands act on. An unknown id
     /// leaves the selection where it was.
@@ -958,6 +989,19 @@ impl Command {
                 bad([cutout.feather]) || cutout.strokes.iter().any(bad_stroke)
             }),
             Command::AddCutoutStroke { stroke, .. } => bad_stroke(stroke),
+            Command::SetClipFootball { marks, .. } => bad(marks
+                .iter()
+                .flat_map(|mark| [mark.strength, mark.size, mark.thickness, mark.squash])),
+            Command::SetClipDrawings { drawings, .. } => bad(drawings.iter().flat_map(|drawing| {
+                [drawing.start, drawing.hold, drawing.reveal, drawing.thickness, drawing.bend]
+                    .into_iter()
+                    .chain(drawing.points.iter().flat_map(|anchor| anchor.at))
+            })),
+            Command::SetTagTemplate { template } => bad(template
+                .categories
+                .iter()
+                .flat_map(|category| [category.lead, category.lag])),
+            Command::SetPlays { plays } => bad(plays.iter().flat_map(|play| [play.start, play.end])),
             Command::MoveClips { moves } => bad(moves.iter().map(|wanted| wanted.start)),
             Command::TrimClip { delta, .. } => bad([*delta]),
             Command::SplitClips { time, .. } => bad([*time]),
@@ -1084,6 +1128,8 @@ pub fn apply(
         command @ (Command::UpdateClip { .. }
         | Command::SetClipSpeed { .. }
         | Command::SetClipCutout { .. }
+        | Command::SetClipFootball { .. }
+        | Command::SetClipDrawings { .. }
         | Command::AddCutoutStroke { .. }
         | Command::SetClipKey { .. }
         | Command::ClearClipKey { .. }
@@ -1104,6 +1150,8 @@ pub fn apply(
         | Command::RemoveTimeline { .. }
         | Command::RenameTimeline { .. }
         | Command::SelectTimeline { .. }
-        | Command::MoveTimeline { .. }) => timelines::apply(project, mint, command),
+        | Command::MoveTimeline { .. }
+        | Command::SetPlays { .. }
+        | Command::SetTagTemplate { .. }) => timelines::apply(project, mint, command),
     }
 }

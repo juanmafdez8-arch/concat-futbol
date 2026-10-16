@@ -5,7 +5,7 @@ import { Wave } from "../primitives/wave.slint";
 import { Theme } from "../theme/theme.slint";
 import { Fmt, Payload } from "../util.slint";
 import { Glyph, Icon } from "../icons.slint";
-import { ClipData, ClipKind, DropData, TimelineTool, TrackData } from "model.slint";
+import { ClipData, ClipKind, DropData, PlayMarkData, TimelineTool, TrackData } from "model.slint";
 import { ContextMenu, MenuItemData } from "../primitives/context-menu.slint";
 
 // The lanes: the ruler, the banded track stack, the clips on it, the playhead
@@ -1036,6 +1036,10 @@ export component Lanes inherits Rectangle {
     in property <float> playhead;
     /// The selected clip's keys as instants; see `Editor.key-marks`.
     in property <[float]> key-marks;
+    /// The marked stretch, -1 for no mark, and the plays; see Editor.
+    in property <float> mark-in: -1;
+    in property <float> mark-out: -1;
+    in property <[PlayMarkData]> play-marks;
     in property <float> frame-rate: 30;
     /// Seconds at the left edge of the lanes.
     in property <float> scroll-left;
@@ -1739,6 +1743,61 @@ export component Lanes inherits Rectangle {
             menu-height: root.menu-height;
             token: root.own-token;
             selected(id) => { root.menu-selected(id); }
+        }
+
+        // ── the marked stretch and the plays ─────────────────────────────
+        //
+        // What I and O marked, tinted across every lane with its edges in
+        // the accent, so what E or R will take out is in plain sight; and
+        // each play as a band in its tag's colour along the foot of the
+        // ruler, named.
+        if root.mark-in >= 0 || root.mark-out >= 0: Rectangle {
+            property <float> from: root.mark-in >= 0 ? root.mark-in : 0;
+            property <float> to: root.mark-out >= 0 ? root.mark-out : root.seconds-at(root.width);
+            x: root.at(self.from);
+            y: 0;
+            width: Math.max(1px, root.at(self.to) - root.at(self.from));
+            height: root.height;
+            background: Theme.accent.with-alpha(0.12);
+
+            Rectangle {
+                x: 0;
+                y: 0;
+                width: 2px;
+                height: parent.height;
+                background: Theme.accent;
+                visible: root.mark-in >= 0;
+            }
+
+            Rectangle {
+                x: parent.width - 2px;
+                y: 0;
+                width: 2px;
+                height: parent.height;
+                background: Theme.accent;
+                visible: root.mark-out >= 0;
+            }
+        }
+        for play in root.play-marks: Rectangle {
+            x: root.at(play.start);
+            y: root.ruler-height - 11px;
+            width: Math.max(2px, root.at(play.end) - root.at(play.start));
+            height: 11px;
+            background: play.colour.with-alpha(0.9);
+            border-radius: 2px;
+            visible: self.x + self.width >= 0px && self.x <= root.width;
+
+            Text {
+                x: 3px;
+                y: 0;
+                width: Math.max(0px, parent.width - 5px);
+                height: parent.height;
+                text: play.label;
+                font-size: 8px;
+                color: #ffffff;
+                vertical-alignment: center;
+                overflow: elide;
+            }
         }
 
         // ── the preview axis ─────────────────────────────────────────────

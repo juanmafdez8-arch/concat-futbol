@@ -115,6 +115,8 @@ pub(crate) struct BuiltTimeline {
     pub(crate) transitions: Vec<TransitionSpan>,
     /// The clips whose background a mask takes away.
     pub(crate) cutouts: HashMap<ClipId, CutoutJob>,
+    /// The clips with football marks, or being picked from.
+    pub(crate) football: HashMap<ClipId, crate::football::FootballJob>,
 }
 
 /// A packaged transition over a cut. The incoming clip has been overlapped
@@ -213,6 +215,7 @@ pub(crate) fn build_timeline(
     let mut reveal_maps: HashMap<ClipId, Arc<RevealMap>> = HashMap::new();
     let mut cutouts: HashMap<ClipId, CutoutJob> = HashMap::new();
     let mut highlight: Option<ClipId> = None;
+    let mut football: HashMap<ClipId, crate::football::FootballJob> = HashMap::new();
 
     let lanes = visible.iter().map(|clip| clip.track).max().unwrap_or(0) + 1;
     let tracks: Vec<_> = (0..lanes)
@@ -300,6 +303,9 @@ pub(crate) fn build_timeline(
             if let Some(job) = CutoutJob::of(clip, planned.is_none()) {
                 cutouts.insert(id, job);
             }
+            if let Some(job) = crate::football::FootballJob::of(clip, planned.is_none()) {
+                football.insert(id, job);
+            }
             if clip.highlighted {
                 highlight = Some(id);
             }
@@ -319,6 +325,7 @@ pub(crate) fn build_timeline(
         chains,
         reveal_maps,
         cutouts,
+        football,
         highlight,
     }
 }

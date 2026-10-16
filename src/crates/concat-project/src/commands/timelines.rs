@@ -15,6 +15,24 @@ pub(super) fn apply(
     command: Command,
 ) -> Result<Outcome, CommandError> {
     match command {
+        Command::SetTagTemplate { template } => {
+            let applied = assign(&mut project.tagging, Some(template.tidy()));
+            Ok(Outcome {
+                created_id: None,
+                applied,
+            })
+        }
+
+        Command::SetPlays { plays } => {
+            let plays: Vec<crate::model::Play> =
+                plays.into_iter().filter_map(crate::model::Play::tidy).collect();
+            let applied = assign(&mut project.active_mut().plays, plays);
+            Ok(Outcome {
+                created_id: None,
+                applied,
+            })
+        }
+
         Command::AddTimeline => {
             let id = mint.next("tl");
             let name = next_numbered(
@@ -42,6 +60,7 @@ pub(super) fn apply(
                 video,
                 tracks,
                 clips: Vec::new(),
+                plays: Vec::new(),
                 extra: Default::default(),
             }));
             project.active_timeline_id = id.clone();

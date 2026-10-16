@@ -46,6 +46,8 @@ pub struct Host {
     pub cutouts: Arc<concat_host::Cutouts>,
     /// The brush model, and the regions it reads under smart strokes.
     pub brushes: Arc<concat_host::Brushes>,
+    /// The football detectors, and the tracks and silhouettes they find.
+    pub footballs: Arc<concat_host::Footballs>,
     /// The restoration model, and the enhanced copies it writes.
     pub enhancers: Arc<concat_host::Enhancers>,
     pub reversers: Arc<concat_host::Reversers>,
@@ -67,10 +69,12 @@ impl Host {
     pub fn start(gpu: Option<Gpu>) -> Result<Host, String> {
         let dirs = AppDirs::locate()?;
         let _ = std::fs::create_dir_all(&dirs.config);
+        let brushes = Arc::new(concat_host::Brushes::new(&dirs.data));
         Ok(Host {
             titles: concat_host::Titles::new(&dirs),
             cutouts: Arc::new(concat_host::Cutouts::new(&dirs.data)),
-            brushes: Arc::new(concat_host::Brushes::new(&dirs.data)),
+            footballs: Arc::new(concat_host::Footballs::new(&dirs.data, Arc::clone(&brushes))),
+            brushes,
             enhancers: Arc::new(concat_host::Enhancers::new(&dirs.data)),
             reversers: Arc::new(concat_host::Reversers::new()),
             dirs,

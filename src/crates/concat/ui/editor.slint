@@ -13,7 +13,8 @@ import { DockDivider, DockSide, SeatBox } from "dock.slint";
 import { PaneKind } from "workspace/pane-switcher.slint";
 import { MenuItemData } from "primitives/context-menu.slint";
 import {
-    ClipData, ClipField, ClipTextField, DropData, SelectedClipData, SelectedTransitionData,
+    ClipData, ClipField, ClipTextField, DropData, PlayMarkData, SelectedClipData, SelectedTransitionData,
+    TagButtonData, TagChipData, TagRowData,
     StageGuideData, StageItemData, TimelineTabData, TimelineTool, TrackData,
     TrackSize,
 } from "timeline/model.slint";
@@ -276,6 +277,31 @@ export global Editor {
     callback cutout-painting(on: bool);
     callback cutout-subject(index: int);
     callback cutout-clear();
+    /// Football: find the players and the ball, pick one on the monitor,
+    /// mark it (0 shade, 1 spotlight, 2 ring, 3 erase, 4 isolate), lift it
+    /// onto a layer of its own (moving it, or copying it), clear the marks.
+    callback football-analyse();
+    callback football-pick(on: bool);
+    callback football-mark(style: int);
+    callback football-extract(moving: bool);
+    callback football-clear();
+    /// The chosen player's marks in a colour of the palette, by index.
+    callback football-colour(index: int);
+    /// One of the chosen player's marks' knobs: 0 size, 1 thickness,
+    /// 2 squash, 3 strength.
+    callback football-param(which: int, value: float);
+    /// Telestration: the tool (0 line, 1 arrow, 2 curve, 3 zone, 4 link;
+    /// the same again puts it away), its style (0 dashed, 1 thickness,
+    /// 2 hold, 3 reveal, 4 bend), its colour, and finishing, undoing and
+    /// clearing the drawings.
+    callback draw-tool(index: int);
+    callback draw-option(which: int, value: float);
+    callback draw-colour(index: int);
+    callback draw-finish();
+    callback draw-undo();
+    callback draw-clear();
+    /// Freeze the picture at the playhead and draw on it in sequence.
+    callback draw-freeze();
     callback clip-enhance-set(on: bool);
     /// The transition riding into the selected clip; see VideoPanel.
     callback transition-remove();
@@ -326,6 +352,37 @@ export global Editor {
     /// The selected clip's keys, as instants on the timeline: the ruler's
     /// diamonds. Empty unless exactly one clip is selected.
     in-out property <[float]> key-marks;
+    /// The marked stretch, in timeline seconds, -1 for no mark; and the
+    /// plays drawn on the ruler. See Studio's montage.
+    in-out property <float> mark-in: -1;
+    in-out property <float> mark-out: -1;
+    in-out property <[PlayMarkData]> play-marks;
+    /// The tagging pane; see Studio's tagging. `tag-filter` is the row of
+    /// the category the list shows, -1 for all; `tag-current` the name of
+    /// the register in hand, empty for none, and `tag-rating` its stars.
+    in-out property <[TagButtonData]> tag-buttons;
+    in-out property <[TagChipData]> tag-chips;
+    in-out property <[TagRowData]> tag-rows;
+    in-out property <[string]> tag-filter-options;
+    in-out property <int> tag-filter: -1;
+    in-out property <int> tag-min-rating;
+    in-out property <bool> tag-editing;
+    in-out property <string> tag-current;
+    in-out property <int> tag-rating;
+    callback tag-press(index: int);
+    callback tag-descriptor(index: int);
+    callback tag-rate(stars: int);
+    callback tag-select(id: string);
+    callback tag-delete(id: string);
+    callback tag-filter-category(index: int);
+    callback tag-filter-rating(stars: int);
+    callback tag-present();
+    callback tag-edit(on: bool);
+    callback tag-category-add(name: string);
+    callback tag-category-remove(index: int);
+    callback tag-category-time(index: int, which: int, seconds: float);
+    callback tag-descriptor-add(name: string);
+    callback tag-descriptor-remove(index: int);
     in-out property <float> frame-rate;
     in-out property <float> scroll-left;
     in-out property <float> seconds-per-pixel;

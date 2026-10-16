@@ -1,0 +1,480 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Jareer and Concat contributors
+
+// Tagging, the way Nacsport's tagging window works: a button per category,
+// pressed as the play happens - or its key, 1 to 9, without looking - to
+// cut a register round the playhead, as far back and on as the category
+// says; then the descriptors and the stars that qualify the register just
+// made. Under them the registers themselves, filtered by category and by
+// rating, any one a click away, and the filtered lot a presentation - a
+// timeline of their own - in one press. The template is the project's and
+// is edited here: categories, their reach either side, descriptors.
+
+import { ScrollView } from "std-widgets.slint";
+import { I18n } from "../i18n.slint";
+import { Theme } from "../theme/theme.slint";
+import { Button, Field } from "../primitives/modal.slint";
+import { Select } from "../primitives/select.slint";
+import { NumberField } from "../primitives/number-field.slint";
+import { TagButtonData, TagChipData, TagRowData } from "../timeline/model.slint";
+import { Editor } from "../editor.slint";
+import { Pane } from "pane.slint";
+import { PaneKind, PaneSwitcher } from "pane-switcher.slint";
+
+// A category button: its colour as a band down the left, its name, its key
+// and how many registers it has.
+component TagButton inherits Rectangle {
+    in property <TagButtonData> data;
+    callback pressed();
+
+    height: 44px;
+    border-radius: Theme.r;
+    background: touch.pressed ? data.colour.with-alpha(0.45)
+        : touch.has-hover ? data.colour.with-alpha(0.28) : data.colour.with-alpha(0.16);
+    border-width: 1px;
+    border-color: data.colour.with-alpha(0.7);
+
+    Rectangle {
+        x: 0;
+        width: 5px;
+        height: parent.height;
+        border-radius: 2px;
+        background: data.colour;
+    }
+
+    Text {
+        x: 12px;
+        y: 5px;
+        width: parent.width - 44px;
+        text: data.name;
+        color: Theme.fg;
+        font-size: Theme.fs;
+        font-weight: 600;
+        overflow: elide;
+    }
+
+    Text {
+        x: 12px;
+        y: parent.height - self.height - 5px;
+        text: data.count == 1 ? I18n.t("tag.oneRegister") : I18n.t1("tag.registers", "\{data.count}");
+        color: Theme.fg-muted;
+        font-size: Theme.fs - 1px;
+    }
+
+    if data.key != "": Rectangle {
+        x: parent.width - 26px;
+        y: 6px;
+        width: 20px;
+        height: 18px;
+        border-radius: 3px;
+        background: Theme.field;
+        border-width: 1px;
+        border-color: Theme.line;
+
+        Text {
+            text: data.key;
+            color: Theme.fg;
+            font-size: Theme.fs - 1px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.pressed(); }
+    }
+}
+
+// A descriptor: lit when the register in hand carries it.
+component TagChip inherits Rectangle {
+    in property <TagChipData> data;
+    callback toggled();
+
+    height: 26px;
+    border-radius: 13px;
+    background: data.on ? Theme.accent.with-alpha(0.85) : touch.has-hover ? Theme.field-hover : Theme.field;
+    border-width: 1px;
+    border-color: data.on ? Theme.accent : Theme.line;
+
+    Text {
+        x: 10px;
+        width: parent.width - 20px;
+        height: parent.height;
+        text: data.name;
+        color: data.on ? #111111 : Theme.fg;
+        font-size: Theme.fs - 1px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.toggled(); }
+    }
+}
+
+export component TaggingPane inherits Pane {
+    in property <int> pane-seat;
+    in property <bool> pane-removable;
+    callback pane-picked(kind: PaneKind);
+    callback pane-removed();
+
+    /// What the template editor's two fields hold.
+    property <string> new-category;
+    property <string> new-descriptor;
+    /// Buttons and chips per row.
+    property <int> across: root.width > 520px ? 4 : root.width > 340px ? 3 : 2;
+
+    VerticalLayout {
+        // The bar every pane has: the switcher, the name, and the editor's
+        // switch on the right.
+        Rectangle {
+            height: 52px;
+            Rectangle {
+                y: parent.height - 1px;
+                height: 1px;
+                background: Theme.line;
+            }
+
+            HorizontalLayout {
+                padding-left: Theme.pad;
+                padding-right: Theme.pad;
+                spacing: 8px;
+                alignment: space-between;
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    VerticalLayout {
+                        alignment: center;
+                        PaneSwitcher {
+                            kind: PaneKind.tagging;
+                            seat: root.pane-seat;
+                            removable: root.pane-removable;
+                            picked(kind) => { root.pane-picked(kind); }
+                            removed => { root.pane-removed(); }
+                        }
+                    }
+
+                    Text {
+                        text: I18n.t("tag.title");
+                        color: Theme.fg;
+                        font-size: Theme.fs + 1px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    Button {
+                        label: Editor.tag-editing ? I18n.t("tag.done") : I18n.t("tag.editTemplate");
+                        ghost: !Editor.tag-editing;
+                        primary: Editor.tag-editing;
+                        clicked => { Editor.tag-edit(!Editor.tag-editing); }
+                    }
+                }
+            }
+        }
+
+        ScrollView {
+            VerticalLayout {
+                padding: Theme.pad;
+                spacing: 10px;
+
+                // ── the template editor ──
+                if Editor.tag-editing: VerticalLayout {
+                    spacing: 6px;
+
+                    Text {
+                        text: I18n.t("tag.categories");
+                        color: Theme.fg-muted;
+                        font-size: Theme.fs - 1px;
+                    }
+
+                    for button[index] in Editor.tag-buttons: HorizontalLayout {
+                        spacing: 6px;
+                        height: 28px;
+
+                        Rectangle {
+                            width: 12px;
+                            height: 12px;
+                            y: (parent.height - self.height) / 2;
+                            border-radius: 6px;
+                            background: button.colour;
+                        }
+
+                        Text {
+                            text: button.name;
+                            color: Theme.fg;
+                            font-size: Theme.fs;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            horizontal-stretch: 1;
+                        }
+
+                        Text {
+                            text: I18n.t("tag.before");
+                            color: Theme.fg-muted;
+                            font-size: Theme.fs - 1px;
+                            vertical-alignment: center;
+                        }
+
+                        NumberField {
+                            width: 56px;
+                            value: button.lead;
+                            minimum: 0;
+                            maximum: 60;
+                            step: 0.5;
+                            precision: 1;
+                            unit: "s";
+                            changed(v) => { Editor.tag-category-time(index, 0, v); }
+                        }
+
+                        Text {
+                            text: I18n.t("tag.after");
+                            color: Theme.fg-muted;
+                            font-size: Theme.fs - 1px;
+                            vertical-alignment: center;
+                        }
+
+                        NumberField {
+                            width: 56px;
+                            value: button.lag;
+                            minimum: 0;
+                            maximum: 60;
+                            step: 0.5;
+                            precision: 1;
+                            unit: "s";
+                            changed(v) => { Editor.tag-category-time(index, 1, v); }
+                        }
+
+                        Button {
+                            label: "×";
+                            ghost: true;
+                            square: true;
+                            clicked => { Editor.tag-category-remove(index); }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 6px;
+                        Field {
+                            horizontal-stretch: 1;
+                            value: root.new-category;
+                            placeholder: I18n.t("tag.newCategory");
+                            edited(text) => { root.new-category = text; }
+                        }
+
+                        Button {
+                            label: I18n.t("tag.add");
+                            enabled: root.new-category != "";
+                            clicked => {
+                                Editor.tag-category-add(root.new-category);
+                                root.new-category = "";
+                            }
+                        }
+                    }
+
+                    Text {
+                        text: I18n.t("tag.descriptors");
+                        color: Theme.fg-muted;
+                        font-size: Theme.fs - 1px;
+                    }
+
+                    for chip[index] in Editor.tag-chips: HorizontalLayout {
+                        spacing: 6px;
+                        height: 26px;
+                        Text {
+                            text: chip.name;
+                            color: Theme.fg;
+                            font-size: Theme.fs;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+
+                        Button {
+                            label: "×";
+                            ghost: true;
+                            square: true;
+                            clicked => { Editor.tag-descriptor-remove(index); }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 6px;
+                        Field {
+                            horizontal-stretch: 1;
+                            value: root.new-descriptor;
+                            placeholder: I18n.t("tag.newDescriptor");
+                            edited(text) => { root.new-descriptor = text; }
+                        }
+
+                        Button {
+                            label: I18n.t("tag.add");
+                            enabled: root.new-descriptor != "";
+                            clicked => {
+                                Editor.tag-descriptor-add(root.new-descriptor);
+                                root.new-descriptor = "";
+                            }
+                        }
+                    }
+                }
+
+                // ── the buttons ──
+                if !Editor.tag-editing: VerticalLayout {
+                    spacing: 6px;
+                    for row in Math.ceil(Editor.tag-buttons.length / root.across): HorizontalLayout {
+                        spacing: 6px;
+                        for column in root.across: Rectangle {
+                            horizontal-stretch: 1;
+                            height: 44px;
+                            if row * root.across + column < Editor.tag-buttons.length: TagButton {
+                                width: parent.width;
+                                data: Editor.tag-buttons[row * root.across + column];
+                                pressed => { Editor.tag-press(row * root.across + column); }
+                            }
+                        }
+                    }
+                }
+
+                // ── the register in hand: its descriptors and its stars ──
+                if !Editor.tag-editing && Editor.tag-chips.length > 0: VerticalLayout {
+                    spacing: 6px;
+                    Text {
+                        text: Editor.tag-current == "" ? I18n.t("tag.noneInHand") : I18n.t1("tag.inHand", Editor.tag-current);
+                        color: Theme.fg-muted;
+                        font-size: Theme.fs - 1px;
+                    }
+
+                    for row in Math.ceil(Editor.tag-chips.length / root.across): HorizontalLayout {
+                        spacing: 6px;
+                        for column in root.across: Rectangle {
+                            horizontal-stretch: 1;
+                            height: 26px;
+                            if row * root.across + column < Editor.tag-chips.length: TagChip {
+                                width: parent.width;
+                                data: Editor.tag-chips[row * root.across + column];
+                                toggled => { Editor.tag-descriptor(row * root.across + column); }
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 2px;
+                        alignment: start;
+                        for star in 5: Text {
+                            text: star < Editor.tag-rating ? "★" : "☆";
+                            color: star < Editor.tag-rating ? #f5c518 : Theme.fg-muted;
+                            font-size: 20px;
+                            TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { Editor.tag-rate(star + 1); }
+                            }
+                        }
+                    }
+                }
+
+                // ── the registers ──
+                if !Editor.tag-editing: HorizontalLayout {
+                    spacing: 6px;
+                    Select {
+                        horizontal-stretch: 1;
+                        options: Editor.tag-filter-options;
+                        current: Editor.tag-filter + 1;
+                        changed(index) => { Editor.tag-filter-category(index - 1); }
+                    }
+
+                    Select {
+                        width: 92px;
+                        options: ["☆", "★1+", "★2+", "★3+", "★4+", "★5"];
+                        current: Editor.tag-min-rating;
+                        changed(index) => { Editor.tag-filter-rating(index); }
+                    }
+                }
+
+                if !Editor.tag-editing: VerticalLayout {
+                    spacing: 2px;
+                    for register in Editor.tag-rows: Rectangle {
+                        height: 30px;
+                        border-radius: 3px;
+                        background: register.current ? Theme.accent.with-alpha(0.18)
+                            : row-touch.has-hover ? Theme.field : transparent;
+
+                        row-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { Editor.tag-select(register.id); }
+                        }
+
+                        HorizontalLayout {
+                            padding-left: 6px;
+                            padding-right: 2px;
+                            spacing: 8px;
+
+                            Rectangle {
+                                width: 4px;
+                                background: register.colour;
+                            }
+
+                            Text {
+                                text: register.time;
+                                color: Theme.fg-muted;
+                                font-size: Theme.fs - 1px;
+                                vertical-alignment: center;
+                                width: 40px;
+                            }
+
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                alignment: center;
+                                Text {
+                                    text: register.name;
+                                    color: Theme.fg;
+                                    font-size: Theme.fs;
+                                    overflow: elide;
+                                }
+
+                                if register.descriptors != "": Text {
+                                    text: register.descriptors;
+                                    color: Theme.fg-muted;
+                                    font-size: Theme.fs - 2px;
+                                    overflow: elide;
+                                }
+                            }
+
+                            Text {
+                                text: register.rating > 0 ? "★\{register.rating}" : "";
+                                color: #f5c518;
+                                font-size: Theme.fs - 1px;
+                                vertical-alignment: center;
+                            }
+
+                            Button {
+                                label: "×";
+                                ghost: true;
+                                square: true;
+                                clicked => { Editor.tag-delete(register.id); }
+                            }
+                        }
+                    }
+
+                    if Editor.tag-rows.length == 0: Text {
+                        text: I18n.t("tag.empty");
+                        color: Theme.fg-muted;
+                        font-size: Theme.fs - 1px;
+                        wrap: word-wrap;
+                    }
+                }
+
+                if !Editor.tag-editing: Button {
+                    label: I18n.t1("tag.present", "\{Editor.tag-rows.length}");
+                    primary: true;
+                    block: true;
+                    enabled: Editor.tag-rows.length > 0;
+                    clicked => { Editor.tag-present(); }
+                }
+            }
+        }
+    }
+}

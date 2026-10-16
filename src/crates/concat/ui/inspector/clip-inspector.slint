@@ -952,6 +952,31 @@ export component VideoPanel inherits VerticalLayout {
     /// What the automatic cutout keeps: 0 auto, 1 person, 2 object.
     callback cutout-subject(index: int);
     callback cutout-clear();
+    /// Football: find the players and the ball, pick one on the monitor,
+    /// mark it (0 shade, 1 spotlight, 2 ring, 3 erase, 4 isolate), lift it
+    /// onto a layer of its own (moving it, or copying it), clear the marks.
+    callback football-analyse();
+    callback football-pick(on: bool);
+    callback football-mark(style: int);
+    callback football-extract(moving: bool);
+    callback football-clear();
+    /// The chosen player's marks in a colour of the palette, by index.
+    callback football-colour(index: int);
+    /// One of the chosen player's marks' knobs: 0 size, 1 thickness,
+    /// 2 squash, 3 strength.
+    callback football-param(which: int, value: float);
+    /// Telestration: the tool (0 line, 1 arrow, 2 curve, 3 zone, 4 link;
+    /// the same again puts it away), its style (0 dashed, 1 thickness,
+    /// 2 hold, 3 reveal, 4 bend), its colour, and finishing, undoing and
+    /// clearing the drawings.
+    callback draw-tool(index: int);
+    callback draw-option(which: int, value: float);
+    callback draw-colour(index: int);
+    callback draw-finish();
+    callback draw-undo();
+    callback draw-clear();
+    /// Freeze the picture at the playhead and draw on it in sequence.
+    callback draw-freeze();
 
     /// A shape is a figure, not footage: there is no background to take
     /// away and nothing to crop off its edges, so those sections stay out
@@ -1179,6 +1204,553 @@ export component VideoPanel inherits VerticalLayout {
                 label: I18n.t("clipInspector.flipVertical");
                 checked: root.selected.flip-v;
                 toggled(on) => { root.set(ClipField.flip-v, on ? 1 : 0); root.commit(); }
+            }
+        }
+    }
+
+    // Telestration: lines, arrows, curved runs, zones and lines joining
+    // players, drawn on the monitor over this clip. A point on a tracked
+    // player keeps to his feet. The style below shapes the next drawing,
+    // and the last one drawn, so it can be adjusted after.
+    if !root.figure: Section {
+        drawing := SectionHeader {
+            title: I18n.t("draw.title");
+            collapsible: true;
+            summary: root.selected.drawings > 0 ? I18n.t1("draw.count", "\{root.selected.drawings}")
+                : I18n.t("common.off");
+            HelpButton {
+                text: I18n.t("draw.help");
+            }
+        }
+
+        if drawing.open: SectionBody {
+            HorizontalLayout {
+                padding-left: Theme.pad;
+                padding-right: Theme.pad;
+                spacing: 6px;
+                ToolButton {
+                    glyph: Glyph.minus;
+                    label: I18n.t("draw.line");
+                    checked: root.selected.draw-tool == 0;
+                    clicked => { root.draw-tool(0); }
+                }
+
+                ToolButton {
+                    glyph: Glyph.chevron-right;
+                    label: I18n.t("draw.arrow");
+                    checked: root.selected.draw-tool == 1;
+                    clicked => { root.draw-tool(1); }
+                }
+
+                ToolButton {
+                    glyph: Glyph.curves;
+                    label: I18n.t("draw.curve");
+                    checked: root.selected.draw-tool == 2;
+                    clicked => { root.draw-tool(2); }
+                }
+
+                ToolButton {
+                    glyph: Glyph.shapes;
+                    label: I18n.t("draw.zone");
+                    checked: root.selected.draw-tool == 3;
+                    clicked => { root.draw-tool(3); }
+                }
+
+                ToolButton {
+                    glyph: Glyph.merge;
+                    label: I18n.t("draw.link");
+                    checked: root.selected.draw-tool == 4;
+                    clicked => { root.draw-tool(4); }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+            }
+
+            if root.selected.draw-tool >= 0: Note {
+                text: root.selected.draw-tool >= 3 ? I18n.t("draw.clickPoints") : I18n.t("draw.dragHint");
+            }
+
+            Row {
+                label: I18n.t("draw.freezeHint");
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                Button {
+                    label: I18n.t("draw.freeze");
+                    primary: root.selected.kind == ClipKind.video;
+                    enabled: root.selected.kind == ClipKind.video || root.selected.kind == ClipKind.image;
+                    clicked => { root.draw-freeze(); }
+                }
+            }
+
+            Param {
+                label: I18n.t("draw.freezeFor");
+                value: root.selected.draw-freeze;
+                minimum: 0.5;
+                maximum: 30;
+                step: 0.5;
+                default-value: 5;
+                fmt: ParamFormat.seconds;
+                changed(v) => { root.draw-option(5, v); }
+            }
+
+            if root.selected.draw-tool >= 3: Row {
+                label: I18n.t1("draw.points", "\{root.selected.draw-points}");
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                Button {
+                    label: I18n.t("draw.finish");
+                    primary: true;
+                    enabled: root.selected.draw-points >= (root.selected.draw-tool == 3 ? 3 : 2);
+                    clicked => { root.draw-finish(); }
+                }
+            }
+
+            Row {
+                label: I18n.t("football.colour");
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                Rectangle {
+                    width: 18px;
+                    height: 18px;
+                    border-radius: 9px;
+                    background: #cbf53f;
+                    border-width: root.selected.draw-colour == 0 ? 2px : 1px;
+                    border-color: root.selected.draw-colour == 0 ? Theme.fg : Theme.line;
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.draw-colour(0); }
+                    }
+                }
+
+                Rectangle {
+                    width: 18px;
+                    height: 18px;
+                    border-radius: 9px;
+                    background: #e74c3c;
+                    border-width: root.selected.draw-colour == 1 ? 2px : 1px;
+                    border-color: root.selected.draw-colour == 1 ? Theme.fg : Theme.line;
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.draw-colour(1); }
+                    }
+                }
+
+                Rectangle {
+                    width: 18px;
+                    height: 18px;
+                    border-radius: 9px;
+                    background: #3fa9f5;
+                    border-width: root.selected.draw-colour == 2 ? 2px : 1px;
+                    border-color: root.selected.draw-colour == 2 ? Theme.fg : Theme.line;
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.draw-colour(2); }
+                    }
+                }
+
+                Rectangle {
+                    width: 18px;
+                    height: 18px;
+                    border-radius: 9px;
+                    background: #f5d63f;
+                    border-width: root.selected.draw-colour == 3 ? 2px : 1px;
+                    border-color: root.selected.draw-colour == 3 ? Theme.fg : Theme.line;
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.draw-colour(3); }
+                    }
+                }
+
+                Rectangle {
+                    width: 18px;
+                    height: 18px;
+                    border-radius: 9px;
+                    background: #ffffff;
+                    border-width: root.selected.draw-colour == 4 ? 2px : 1px;
+                    border-color: root.selected.draw-colour == 4 ? Theme.fg : Theme.line;
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.draw-colour(4); }
+                    }
+                }
+
+                Rectangle {
+                    width: 18px;
+                    height: 18px;
+                    border-radius: 9px;
+                    background: #ff8c1a;
+                    border-width: root.selected.draw-colour == 5 ? 2px : 1px;
+                    border-color: root.selected.draw-colour == 5 ? Theme.fg : Theme.line;
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.draw-colour(5); }
+                    }
+                }
+
+            }
+
+            Row {
+                label: I18n.t("draw.dashed");
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                ToolButton {
+                    glyph: Glyph.minus;
+                    label: I18n.t("draw.dashed");
+                    checked: root.selected.draw-dashed;
+                    clicked => { root.draw-option(0, root.selected.draw-dashed ? 0 : 1); }
+                }
+            }
+            Param {
+                label: I18n.t("football.thickness");
+                value: root.selected.draw-thickness;
+                minimum: 0.25;
+                maximum: 4;
+                step: 0.05;
+                default-value: 1;
+                fmt: ParamFormat.rate;
+                changed(v) => { root.draw-option(1, v); }
+            }
+            Param {
+                label: I18n.t("draw.hold");
+                value: root.selected.draw-hold;
+                minimum: 0.1;
+                maximum: 30;
+                step: 0.1;
+                default-value: 4;
+                fmt: ParamFormat.seconds;
+                changed(v) => { root.draw-option(2, v); }
+            }
+            Param {
+                label: I18n.t("draw.reveal");
+                value: root.selected.draw-reveal;
+                minimum: 0;
+                maximum: 5;
+                step: 0.05;
+                default-value: 0.6;
+                fmt: ParamFormat.seconds;
+                changed(v) => { root.draw-option(3, v); }
+            }
+            if root.selected.draw-tool == 2: Param {
+                label: I18n.t("draw.bend");
+                value: root.selected.draw-bend;
+                minimum: -1;
+                maximum: 1;
+                step: 0.05;
+                default-value: 0.25;
+                fmt: ParamFormat.fraction;
+                unit: "%";
+                unit-scale: 100;
+                changed(v) => { root.draw-option(4, v); }
+            }
+
+            Row {
+                label: root.selected.drawings > 0 ? I18n.t1("draw.count", "\{root.selected.drawings}") : "";
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                Button {
+                    label: I18n.t("draw.undo");
+                    enabled: root.selected.drawings > 0 || root.selected.draw-points > 0;
+                    clicked => { root.draw-undo(); }
+                }
+
+                Button {
+                    label: I18n.t("draw.clear");
+                    enabled: root.selected.drawings > 0;
+                    clicked => { root.draw-clear(); }
+                }
+            }
+        }
+    }
+
+    // Football: the players and the ball found in the footage and
+    // followed; one picked on the monitor is shaded, spotlit, ringed,
+    // erased or isolated, or lifted onto a layer of its own to move or
+    // copy - which then cuts, copies and pastes like any clip.
+    if !root.figure && root.selected.kind == ClipKind.video: Section {
+        football := SectionHeader {
+            title: I18n.t("football.title");
+            collapsible: true;
+            summary: !root.selected.football-analysed ? I18n.t("common.off")
+                : root.selected.football-marks > 0 ? I18n.t1("football.marks", "\{root.selected.football-marks}")
+                : I18n.t("football.ready");
+            HelpButton {
+                text: I18n.t("football.help");
+            }
+        }
+
+        if football.open: SectionBody {
+            if root.selected.football-progress >= 0: AnalysisRow {
+                progress: root.selected.football-progress;
+                fetching: false;
+            }
+            if root.selected.football-progress >= 0: Note {
+                text: root.selected.football-silhouettes ? I18n.t("football.silhouettes") : I18n.t("football.analysing");
+            }
+
+            Row {
+                label: root.selected.football-analysed ? I18n.t("football.found") : I18n.t("football.notYet");
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                Button {
+                    label: root.selected.football-analysed ? I18n.t("football.reanalyse") : I18n.t("football.analyse");
+                    primary: !root.selected.football-analysed;
+                    enabled: root.selected.football-progress < 0;
+                    clicked => { root.football-analyse(); }
+                }
+            }
+
+            if root.selected.football-analysed: Row {
+                label: root.selected.football-chosen < 0 ? I18n.t("football.none")
+                    : root.selected.football-ball ? I18n.t("football.ball")
+                    : I18n.t1("football.player", "\{root.selected.football-chosen}");
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                Button {
+                    label: root.selected.football-picking ? I18n.t("common.apply") : I18n.t("football.pick");
+                    primary: root.selected.football-picking;
+                    clicked => { root.football-pick(!root.selected.football-picking); }
+                }
+            }
+            if root.selected.football-analysed && root.selected.football-picking: Note {
+                text: I18n.t("football.picking");
+            }
+
+            if root.selected.football-analysed && root.selected.football-chosen >= 0: HorizontalLayout {
+                padding-left: Theme.pad;
+                padding-right: Theme.pad;
+                spacing: 6px;
+                ToolButton {
+                    glyph: Glyph.brush;
+                    label: I18n.t("football.shade");
+                    checked: root.selected.football-shade;
+                    clicked => { root.football-mark(0); }
+                }
+
+                ToolButton {
+                    glyph: Glyph.brush;
+                    smart: true;
+                    label: I18n.t("football.spotlight");
+                    checked: root.selected.football-spotlight;
+                    clicked => { root.football-mark(1); }
+                }
+
+                ToolButton {
+                    glyph: Glyph.brush;
+                    label: I18n.t("football.ring");
+                    checked: root.selected.football-ring;
+                    clicked => { root.football-mark(2); }
+                }
+
+                ToolButton {
+                    glyph: Glyph.eraser;
+                    label: I18n.t("football.erase");
+                    checked: root.selected.football-erase;
+                    clicked => { root.football-mark(3); }
+                }
+
+                ToolButton {
+                    glyph: Glyph.eraser;
+                    smart: true;
+                    label: I18n.t("football.isolate");
+                    checked: root.selected.football-isolate;
+                    clicked => { root.football-mark(4); }
+                }
+
+                ToolButton {
+                    glyph: Glyph.chevron-down;
+                    label: I18n.t("football.arrow");
+                    checked: root.selected.football-arrow;
+                    clicked => { root.football-mark(5); }
+                }
+
+                ToolButton {
+                    glyph: Glyph.frame;
+                    label: I18n.t("football.frame");
+                    checked: root.selected.football-frame;
+                    clicked => { root.football-mark(6); }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+            }
+
+            if root.selected.football-analysed && root.selected.football-marks-here > 0: Param {
+                label: I18n.t("football.size");
+                value: root.selected.football-size;
+                minimum: 0.25;
+                maximum: 4;
+                step: 0.05;
+                default-value: 1;
+                fmt: ParamFormat.rate;
+                changed(v) => { root.football-param(0, v); }
+            }
+
+            if root.selected.football-analysed && root.selected.football-marks-here > 0: Param {
+                label: I18n.t("football.thickness");
+                value: root.selected.football-thickness;
+                minimum: 0.25;
+                maximum: 4;
+                step: 0.05;
+                default-value: 1;
+                fmt: ParamFormat.rate;
+                changed(v) => { root.football-param(1, v); }
+            }
+
+            if root.selected.football-analysed && root.selected.football-marks-here > 0: Param {
+                label: I18n.t("football.squash");
+                value: root.selected.football-squash;
+                minimum: 0.25;
+                maximum: 4;
+                step: 0.05;
+                default-value: 1;
+                fmt: ParamFormat.rate;
+                changed(v) => { root.football-param(2, v); }
+            }
+
+            if root.selected.football-analysed && root.selected.football-marks-here > 0: Param {
+                label: I18n.t("football.strength");
+                value: root.selected.football-strength;
+                minimum: 0;
+                maximum: 1;
+                step: 0.05;
+                default-value: 0.8;
+                fmt: ParamFormat.fraction;
+                unit: "%";
+                unit-scale: 100;
+                changed(v) => { root.football-param(3, v); }
+            }
+
+            if root.selected.football-analysed && root.selected.football-chosen >= 0: Row {
+                label: I18n.t("football.colour");
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                Rectangle {
+                    width: 18px;
+                    height: 18px;
+                    border-radius: 9px;
+                    background: #cbf53f;
+                    border-width: root.selected.football-colour == 0 ? 2px : 1px;
+                    border-color: root.selected.football-colour == 0 ? Theme.fg : Theme.line;
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.football-colour(0); }
+                    }
+                }
+
+                Rectangle {
+                    width: 18px;
+                    height: 18px;
+                    border-radius: 9px;
+                    background: #e74c3c;
+                    border-width: root.selected.football-colour == 1 ? 2px : 1px;
+                    border-color: root.selected.football-colour == 1 ? Theme.fg : Theme.line;
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.football-colour(1); }
+                    }
+                }
+
+                Rectangle {
+                    width: 18px;
+                    height: 18px;
+                    border-radius: 9px;
+                    background: #3fa9f5;
+                    border-width: root.selected.football-colour == 2 ? 2px : 1px;
+                    border-color: root.selected.football-colour == 2 ? Theme.fg : Theme.line;
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.football-colour(2); }
+                    }
+                }
+
+                Rectangle {
+                    width: 18px;
+                    height: 18px;
+                    border-radius: 9px;
+                    background: #f5d63f;
+                    border-width: root.selected.football-colour == 3 ? 2px : 1px;
+                    border-color: root.selected.football-colour == 3 ? Theme.fg : Theme.line;
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.football-colour(3); }
+                    }
+                }
+
+                Rectangle {
+                    width: 18px;
+                    height: 18px;
+                    border-radius: 9px;
+                    background: #ffffff;
+                    border-width: root.selected.football-colour == 4 ? 2px : 1px;
+                    border-color: root.selected.football-colour == 4 ? Theme.fg : Theme.line;
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.football-colour(4); }
+                    }
+                }
+
+                Rectangle {
+                    width: 18px;
+                    height: 18px;
+                    border-radius: 9px;
+                    background: #ff8c1a;
+                    border-width: root.selected.football-colour == 5 ? 2px : 1px;
+                    border-color: root.selected.football-colour == 5 ? Theme.fg : Theme.line;
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.football-colour(5); }
+                    }
+                }
+
+            }
+
+            if root.selected.football-analysed && root.selected.football-chosen >= 0: Row {
+                label: I18n.t("football.layer");
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                Button {
+                    label: I18n.t("football.move");
+                    primary: true;
+                    clicked => { root.football-extract(true); }
+                }
+
+                Button {
+                    label: I18n.t("football.copy");
+                    clicked => { root.football-extract(false); }
+                }
+            }
+
+            if root.selected.football-marks > 0: Row {
+                label: I18n.t1("football.marks", "\{root.selected.football-marks}");
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                Button {
+                    label: I18n.t("football.clear");
+                    clicked => { root.football-clear(); }
+                }
             }
         }
     }

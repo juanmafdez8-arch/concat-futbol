@@ -172,6 +172,28 @@ impl Brush {
         embedding: &Embedding,
         picked: &[[f64; 2]],
     ) -> Result<Vec<(f32, Mask)>, String> {
+        self.labelled(embedding, picked, &vec![1i64; picked.len()])
+    }
+
+    /// The model's three answers, each with its own score, for points on
+    /// the thing (`on`) and points off it (`off`), as source fractions.
+    pub fn prompted(
+        &self,
+        embedding: &Embedding,
+        on: &[[f64; 2]],
+        off: &[[f64; 2]],
+    ) -> Result<Vec<(f32, Mask)>, String> {
+        let points: Vec<[f64; 2]> = on.iter().chain(off).copied().collect();
+        let labels: Vec<i64> = on.iter().map(|_| 1).chain(off.iter().map(|_| 0)).collect();
+        self.labelled(embedding, &points, &labels)
+    }
+
+    fn labelled(
+        &self,
+        embedding: &Embedding,
+        picked: &[[f64; 2]],
+        labels: &[i64],
+    ) -> Result<Vec<(f32, Mask)>, String> {
         if picked.is_empty() {
             return Err("brush: a stroke with no points".to_owned());
         }
@@ -185,7 +207,7 @@ impl Brush {
                 ]
             })
             .collect();
-        let labels = vec![1i64; picked.len()];
+        let labels = labels.to_vec();
         let inputs = vec![
             Input {
                 name: "input_points",

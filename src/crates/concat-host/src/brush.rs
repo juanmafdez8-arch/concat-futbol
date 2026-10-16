@@ -119,7 +119,8 @@ impl Brushes {
         self.gate.cancel();
     }
 
-    fn brush(
+    /// The brush model, loaded once, fetched first if it is not on disk.
+    pub(crate) fn brush(
         &self,
         cancel: &AtomicBool,
         progress: &mut dyn FnMut(Progress),

@@ -1,0 +1,110 @@
+name: Football build (Windows)
+
+# The football fork's own build: the Concat window for Windows x86_64,
+# with the football analysis, telestration, montage and tagging tools,
+# as a zip of the program and the libraries it loads. Runs on every push
+# to the `football` branch and on demand. The steps are build-app.yml's
+# Windows ones; the installers and signing are left out, since the zip is
+# what the fork's author runs.
+on:
+  push:
+    branches: [football]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  FFMPEG_RELEASE: https://github.com/BtbN/FFmpeg-Builds/releases/download/latest
+  FFMPEG_VERSION: 8.1
+  # As build-app.yml: an AVX baseline, so the binary runs on any x86_64.
+  GGML_NATIVE: "OFF"
+  GGML_AVX2: "OFF"
+  GGML_FMA: "OFF"
+  GGML_F16C: "OFF"
+  GGML_BMI2: "OFF"
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The pinned toolchain
+        id: toolchain
+        shell: bash
+        run: echo "channel=$(sed -n 's/^channel = "\(.*\)"/\1/p' src/rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+
+      - name: FFmpeg development libraries and LLVM
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          choco install llvm -y --no-progress
+          "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+          "LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $url = "$env:FFMPEG_RELEASE/ffmpeg-n$env:FFMPEG_VERSION-latest-win64-gpl-shared-$env:FFMPEG_VERSION.zip"
+          curl.exe -fsSL --retry 5 --retry-all-errors -o ffmpeg-win.zip "$url"
+          Expand-Archive ffmpeg-win.zip -DestinationPath ffdl
+          $dir = (Get-ChildItem ffdl -Directory | Select-Object -First 1).FullName
+          "FFMPEG_DIR=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "$dir\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      # Import libraries in one folder, DLLs in another: see build-app.yml
+      # for why the sys crate must not see the DLLs.
+      - name: sherpa-onnx shared libraries
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = (Select-String -Path src\Cargo.lock -Pattern 'name = "sherpa-onnx-sys"' -Context 0,1).Context.PostContext[0] -replace '.*"(.*)".*', '$1'
+          $stem = "sherpa-onnx-v$version-win-x64-shared-MT-Release-lib"
+          curl.exe -fsSL --retry 5 --retry-all-errors -o sherpa.tar.bz2 "https://github.com/k2-fsa/sherpa-onnx/releases/download/v$version/$stem.tar.bz2"
+          python -c "import tarfile; t = tarfile.open('sherpa.tar.bz2'); t.extractall(**({'filter': 'data'} if hasattr(tarfile, 'data_filter') else {}))"
+          New-Item -ItemType Directory -Force sherpa-libs, sherpa-dlls | Out-Null
+          Copy-Item "$stem\lib\*.lib" sherpa-libs\
+          Copy-Item "$stem\lib\*.dll" sherpa-dlls\
+          "SHERPA_ONNX_LIB_DIR=$PWD\sherpa-libs" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "SHERPA_DLL_DIR=$PWD\sherpa-dlls" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          env-vars: CARGO CC CFLAGS CXX CMAKE RUST GGML
+
+      - name: Engine tests
+        shell: bash
+        working-directory: src
+        run: cargo test --release -p concat-project -p concat-vision --features concat-vision/infer
+
+      - name: Build
+        shell: bash
+        working-directory: src
+        run: |
+          set -o pipefail
+          cargo build --release -p concat --target x86_64-pc-windows-msvc 2>&1 | tee build.log
+
+      - name: Build log to the summary (failure only)
+        if: failure()
+        shell: bash
+        run: |
+          if [ -f src/build.log ]; then
+            { echo '### Build failed'; echo '```'; tail -n 150 src/build.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Stage
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $name = "Concat-Futbol-windows-x86_64"
+          New-Item -ItemType Directory -Force "stage\$name" | Out-Null
+          Copy-Item "src\target\x86_64-pc-windows-msvc\release\concat.exe" "stage\$name\"
+          Copy-Item "$env:FFMPEG_DIR\bin\*.dll" "stage\$name\"
+          Copy-Item "$env:SHERPA_DLL_DIR\*.dll" "stage\$name\"
+          Copy-Item LICENSE, THIRD_PARTY_NOTICES.md "stage\$name\"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Concat-Futbol-windows-x86_64
+          path: stage/*
+          if-no-files-found: error

@@ -4291,4 +4291,84 @@ mod tests {
             .expect("no-op");
         assert!(!off.applied);
     }
+
+    #[test]
+    fn football_marks_drawings_and_plays_round_trip_and_undo() {
+        use crate::model::{
+            Anchor, DrawKind, Drawing, FootballMark, MarkStyle, Play, TagCategory,
+        };
+        let (mut editor, _, clip_id) = fixture();
+        let mut mark = FootballMark::new(7, MarkStyle::Ring);
+        mark.size = 9.0;
+        editor
+            .apply(Command::SetClipFootball {
+                clip_id: clip_id.clone(),
+                marks: vec![mark],
+            })
+            .expect("marks");
+        let held = &editor.project().active().clips[0].football;
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].size, 4.0, "the size is held to its range");
+
+        let drawing = |points: usize| Drawing {
+            kind: DrawKind::Zone,
+            points: (0..points)
+                .map(|i| Anchor {
+                    at: [0.1 * i as f64, 0.5],
+                    track: (i == 0).then_some(7),
+                })
+                .collect(),
+            dashed: true,
+            colour: [255, 0, 0],
+            thickness: 1.0,
+            bend: 0.25,
+            start: 1.0,
+            hold: 2.0,
+            reveal: 5.0,
+        };
+        editor
+            .apply(Command::SetClipDrawings {
+                clip_id: clip_id.clone(),
+                drawings: vec![drawing(3), drawing(2)],
+            })
+            .expect("drawings");
+        let drawings = &editor.project().active().clips[0].drawings;
+        assert_eq!(drawings.len(), 1, "a zone of two points is no zone");
+        assert_eq!(drawings[0].reveal, 2.0, "the draw-on fits the hold");
+
+        editor
+            .apply(Command::SetPlays {
+                plays: vec![Play {
+                    id: "p1".to_owned(),
+                    name: "Presión 1".to_owned(),
+                    tag: "Presión".to_owned(),
+                    start: 5.0,
+                    end: 2.0,
+                    descriptors: vec!["Fallo".to_owned(), "Fallo".to_owned()],
+                    rating: 9,
+                }],
+            })
+            .expect("plays");
+        let play = &editor.project().active().plays[0];
+        assert_eq!((play.start, play.end), (2.0, 5.0));
+        assert_eq!(play.rating, 5);
+        assert_eq!(play.descriptors, vec!["Fallo".to_owned()]);
+
+        let text = serde_json::to_string(editor.project()).expect("saves");
+        let back: crate::model::Project = serde_json::from_str(&text).expect("loads");
+        assert_eq!(back.active().clips[0].drawings, editor.project().active().clips[0].drawings);
+        assert_eq!(back.active().plays, editor.project().active().plays);
+
+        let mut template = editor.project().tag_template();
+        assert!(!template.categories.is_empty());
+        template.categories.push(TagCategory::new("  ", [0, 0, 0]));
+        template.categories.push(template.categories[0].clone());
+        let before = template.categories.len();
+        editor
+            .apply(Command::SetTagTemplate { template })
+            .expect("template");
+        assert_eq!(editor.project().tag_template().categories.len(), before - 2);
+        assert!(editor.undo());
+        assert!(editor.project().tagging.is_none());
+    }
 }

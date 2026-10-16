@@ -577,6 +577,29 @@ export component App inherits Window {
             // flipping is the inspector's and the clip menu's now, and J
             // is free.
             if (letter == "h") { Editor.shortcut("pan"); return accept; }
+            // The montage keys, as CapCut and every broadcast editor lay
+            // them out: Q and W cut away what is left or right of the
+            // playhead, I and O mark a stretch, X clears it, E extracts it
+            // and R lifts it, P marks it as a play, [ and ] walk the plays.
+            if (letter == "q") { Editor.shortcut("delete-left"); return accept; }
+            if (letter == "w") { Editor.shortcut("delete-right"); return accept; }
+            if (letter == "i") { Editor.shortcut("mark-in"); return accept; }
+            if (letter == "o") { Editor.shortcut("mark-out"); return accept; }
+            if (letter == "x") { Editor.shortcut("clear-marks"); return accept; }
+            if (letter == "e") { Editor.shortcut("extract"); return accept; }
+            if (letter == "r") { Editor.shortcut("lift"); return accept; }
+            if (letter == "p") { Editor.shortcut("play-add"); return accept; }
+            if (event.text == "[") { Editor.shortcut("play-prev"); return accept; }
+            // 1 to 9: the tagging template's first nine categories, as
+            // Nacsport's keys tag a play without looking away from it.
+            let digit = event.text == "1" ? 0 : event.text == "2" ? 1 : event.text == "3" ? 2
+                : event.text == "4" ? 3 : event.text == "5" ? 4 : event.text == "6" ? 5
+                : event.text == "7" ? 6 : event.text == "8" ? 7 : event.text == "9" ? 8 : -1;
+            if (digit >= 0) {
+                Editor.tag-press(digit);
+                return accept;
+            }
+            if (event.text == "]") { Editor.shortcut("play-next"); return accept; }
             return reject;
         }
 
