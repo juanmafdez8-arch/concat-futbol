@@ -75,7 +75,8 @@ jobs:
       - name: Engine tests
         shell: bash
         working-directory: src
-        run: cargo test --release -p concat-project -p concat-vision --features concat-vision/infer
+        # Without `infer`: ONNX Runtime's own tests crash the runner's heap when they load models in parallel; the football tracker, marks and drawings are pure Rust and run here.
+        run: cargo test --release -p concat-project -p concat-vision
 
       - name: Build
         shell: bash
