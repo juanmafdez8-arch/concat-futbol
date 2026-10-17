@@ -6432,6 +6432,111 @@ impl Studio {
         }
     }
 
+    /// The folder an exchange file is offered in: the project's, else home.
+    fn exchange_dir(&self) -> std::path::PathBuf {
+        self.session
+            .as_ref()
+            .map(|session| std::path::PathBuf::from(session.path()))
+            .or_else(std::env::home_dir)
+            .unwrap_or_default()
+    }
+
+    /// The registers the list shows, written where the person says as a
+    /// Sportscode XML edit list (`xml`) - what Nacsport, Sportscode and
+    /// LongoMatch import - or as CSV for a spreadsheet.
+    pub fn tag_export(&mut self, xml: bool) {
+        let plays = self.tag_filtered();
+        if plays.is_empty() {
+            self.notify(&t("montage.noPlays"), true);
+            return;
+        }
+        let template = self.tag_template();
+        let text = if xml {
+            concat_project::exchange::to_sportscode(&plays, &template)
+        } else {
+            concat_project::exchange::to_csv(&plays)
+        };
+        let extension = if xml { "xml" } else { "csv" };
+        let suggested = format!("{}.{extension}", self.timeline().name);
+        let title = t(if xml { "tag.exportXml" } else { "tag.exportCsv" });
+        let family = if xml { "Sportscode XML" } else { "CSV" }.to_owned();
+        let directory = self.exchange_dir();
+        let count = plays.len();
+        crate::host::after_dialog(
+            move || {
+                let chosen =
+                    crate::platform::save_file(&title, &directory, &suggested, (family.as_str(), &[extension]))?;
+                Some(if chosen.extension().is_some_and(|ext| ext.eq_ignore_ascii_case(extension)) {
+                    chosen
+                } else {
+                    chosen.with_extension(extension)
+                })
+            },
+            move |studio, _, _, file: std::path::PathBuf| match std::fs::write(&file, text) {
+                Ok(()) => studio.notify(
+                    &tf("tag.exported", &[&count, &file.display().to_string()]),
+                    false,
+                ),
+                Err(error) => studio.notify(&format!("{}: {error}", file.display()), true),
+            },
+        );
+    }
+
+    /// Plays from a Sportscode XML edit list - Nacsport's, Sportscode's,
+    /// LongoMatch's - added to the active timeline at the times the file
+    /// gives, and any category the template lacks added to it, as one undo
+    /// step.
+    pub fn tag_import(&mut self) {
+        let title = t("tag.importXml");
+        crate::host::after_dialog(
+            move || {
+                crate::platform::pick_files(&title, Some(("Sportscode XML", &["xml"])))
+                    .and_then(|paths| paths.into_iter().next())
+            },
+            move |studio, _, _, file: std::path::PathBuf| studio.tag_import_from(&file),
+        );
+    }
+
+    fn tag_import_from(&mut self, file: &std::path::Path) {
+        let text = match std::fs::read_to_string(file) {
+            Ok(text) => text,
+            Err(error) => {
+                self.notify(&format!("{}: {error}", file.display()), true);
+                return;
+            }
+        };
+        let mut plays = self.timeline().plays.clone();
+        let next = plays
+            .iter()
+            .filter_map(|play| play.id.strip_prefix('p')?.parse::<u32>().ok())
+            .max()
+            .unwrap_or(0)
+            + 1;
+        let imported = match concat_project::exchange::from_sportscode(&text, next) {
+            Ok(imported) => imported,
+            Err(error) => {
+                self.notify(&error, true);
+                return;
+            }
+        };
+        let count = imported.plays.len();
+        plays.extend(imported.plays);
+        let mut template = self.tag_template();
+        let before = template.categories.len();
+        for category in imported.categories {
+            if !template.categories.iter().any(|held| held.name == category.name) {
+                template.categories.push(category);
+            }
+        }
+        let gesture = "tag-import";
+        if template.categories.len() != before {
+            self.apply_in(Some(gesture), Command::SetTagTemplate { template });
+        }
+        self.apply_in(Some(gesture), Command::SetPlays { plays });
+        self.end_burst();
+        self.notify(&tf("tag.imported", &[&count]), false);
+    }
+
     /// The colour a play is drawn in: its category's, else its tag's from
     /// the Montage menu's round, else grey.
     fn play_colour(&self, template: &model::TagTemplate, tag: &str) -> [u8; 3] {

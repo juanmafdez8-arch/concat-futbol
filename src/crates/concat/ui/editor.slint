@@ -383,6 +383,10 @@ export global Editor {
     callback tag-category-time(index: int, which: int, seconds: float);
     callback tag-descriptor-add(name: string);
     callback tag-descriptor-remove(index: int);
+    /// The registers listed, out as Sportscode XML (`xml`) or CSV; and a
+    /// Sportscode XML edit list in.
+    callback tag-export(xml: bool);
+    callback tag-import();
     in-out property <float> frame-rate;
     in-out property <float> scroll-left;
     in-out property <float> seconds-per-pixel;

@@ -467,6 +467,29 @@ export component TaggingPane inherits Pane {
                     }
                 }
 
+                if !Editor.tag-editing: HorizontalLayout {
+                    spacing: 6px;
+                    Button {
+                        horizontal-stretch: 1;
+                        label: I18n.t("tag.exportXml");
+                        enabled: Editor.tag-rows.length > 0;
+                        clicked => { Editor.tag-export(true); }
+                    }
+
+                    Button {
+                        horizontal-stretch: 1;
+                        label: I18n.t("tag.exportCsv");
+                        enabled: Editor.tag-rows.length > 0;
+                        clicked => { Editor.tag-export(false); }
+                    }
+
+                    Button {
+                        horizontal-stretch: 1;
+                        label: I18n.t("tag.importXml");
+                        clicked => { Editor.tag-import(); }
+                    }
+                }
+
                 if !Editor.tag-editing: Button {
                     label: I18n.t1("tag.present", "\{Editor.tag-rows.length}");
                     primary: true;

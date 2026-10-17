@@ -1292,6 +1292,12 @@ pub fn run() -> Result<(), slint::PlatformError> {
     editor.on_tag_descriptor_remove(on_window!(|state, index: i32| {
         state.tag_descriptor_remove(index);
     }));
+    editor.on_tag_export(on_window!(|state, xml: bool| {
+        state.tag_export(xml);
+    }));
+    editor.on_tag_import(on_window!(|state| {
+        state.tag_import();
+    }));
     editor.on_clip_enhance_set(on_window!(|state, on: bool| {
         state.clip_enhance_set(on);
     }));
