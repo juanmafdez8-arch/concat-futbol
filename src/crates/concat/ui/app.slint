@@ -581,6 +581,12 @@ export component App inherits Window {
             // them out: Q and W cut away what is left or right of the
             // playhead, I and O mark a stretch, X clears it, E extracts it
             // and R lifts it, P marks it as a play, [ and ] walk the plays.
+            // J and L skip five seconds back and on, K plays and pauses,
+            // as on every analysis desk; V puts the toolbar's tool away.
+            if (letter == "j") { Editor.shortcut("back-five"); return accept; }
+            if (letter == "k") { Editor.play-toggled(); return accept; }
+            if (letter == "l") { Editor.shortcut("forward-five"); return accept; }
+            if (letter == "v") { Editor.shortcut("pointer-tool"); return accept; }
             if (letter == "q") { Editor.shortcut("delete-left"); return accept; }
             if (letter == "w") { Editor.shortcut("delete-right"); return accept; }
             if (letter == "i") { Editor.shortcut("mark-in"); return accept; }

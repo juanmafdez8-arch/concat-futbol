@@ -1,0 +1,295 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Jareer and Concat contributors
+
+// The analysis toolbar on the monitor, the way Metrica Play and KlipDraw
+// carry their tools on the picture: a slim column down the stage's left
+// edge, the pointer at its head, then the player tools - one click on a
+// player puts the mark on him - then the drawings, then the colour, the
+// freeze, undo and clear. Every button names itself on hover. Over the top
+// of the stage, a line saying what the tool out does next, the analysis's
+// progress while the players are being found, and Finish while a zone or
+// a link is being clicked out.
+
+import { I18n } from "../i18n.slint";
+import { Theme } from "../theme/theme.slint";
+import { Tip } from "../primitives/tooltip.slint";
+import { Editor } from "../editor.slint";
+
+// One tool: a line-drawn icon in a 24 unit box, lit when it is the tool out.
+component BarButton inherits Rectangle {
+    in property <string> icon;
+    in property <string> tip;
+    in property <bool> on;
+    in property <bool> enabled: true;
+    in property <color> swatch: transparent;
+    callback clicked();
+
+    width: 34px;
+    height: 34px;
+    border-radius: 8px;
+    background: root.on ? Theme.accent : touch.has-hover && root.enabled ? #ffffff1f : transparent;
+    opacity: root.enabled ? 1 : 0.4;
+
+    if root.swatch != transparent: Rectangle {
+        width: 18px;
+        height: 18px;
+        border-radius: 9px;
+        background: root.swatch;
+        border-width: 2px;
+        border-color: #ffffffcc;
+    }
+
+    if root.icon != "": Path {
+        width: 18px;
+        height: 18px;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        commands: root.icon;
+        stroke: root.on ? #111111 : #f2f2f2;
+        stroke-width: 1.8px;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+
+    Tip {
+        width: parent.width;
+        height: parent.height;
+        text: root.tip;
+        active: touch.has-hover;
+    }
+}
+
+component Rule inherits Rectangle {
+    height: 1px;
+    background: #ffffff33;
+}
+
+/// The tools, two to a row: the pointer and the colour, the player
+/// tools, the drawings with the freeze, and undo and clear.
+export component AnalysisBar inherits Rectangle {
+    width: column.preferred-width;
+    height: column.preferred-height;
+    border-radius: 12px;
+    background: #141414e6;
+    border-width: 1px;
+    border-color: #ffffff1a;
+    drop-shadow-blur: 12px;
+    drop-shadow-color: #00000066;
+
+    column := VerticalLayout {
+        padding: 5px;
+        spacing: 3px;
+        alignment: start;
+
+        HorizontalLayout {
+            spacing: 3px;
+            BarButton {
+                icon: "M5 3l13 6.5-5.5 1.5-2.5 5.5z";
+                tip: I18n.t("bar.pointer");
+                on: Editor.analysis-tool == 0;
+                clicked => { Editor.analysis-tool-picked(0); }
+            }
+
+            BarButton {
+                swatch: Editor.analysis-colour;
+                tip: I18n.t("bar.colour");
+                clicked => { Editor.analysis-colour-next(); }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 3px;
+            BarButton {
+                icon: "M12 8a4 4 0 1 0 0 8a4 4 0 1 0 0-8 M12 2v2 M12 20v2 M4.9 4.9l1.4 1.4 M17.7 17.7l1.4 1.4 M2 12h2 M20 12h2 M4.9 19.1l1.4-1.4 M17.7 6.3l1.4-1.4";
+                tip: I18n.t("bar.spotlight");
+                on: Editor.analysis-tool == 1;
+                clicked => { Editor.analysis-tool-picked(1); }
+            }
+
+            BarButton {
+                icon: "M12 3a3 3 0 1 0 0 6a3 3 0 1 0 0-6 M6 21v-2a6 6 0 0 1 12 0v2z";
+                tip: I18n.t("bar.shade");
+                on: Editor.analysis-tool == 2;
+                clicked => { Editor.analysis-tool-picked(2); }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 3px;
+            BarButton {
+                icon: "M12 2a2.5 2.5 0 1 0 0 5a2.5 2.5 0 1 0 0-5 M12 9v8 M3 19a9 3 0 1 0 18 0a9 3 0 1 0-18 0";
+                tip: I18n.t("bar.ring");
+                on: Editor.analysis-tool == 3;
+                clicked => { Editor.analysis-tool-picked(3); }
+            }
+
+            BarButton {
+                icon: "M8 2h8l-4 5z M12 11a2.5 2.5 0 1 0 0 5a2.5 2.5 0 1 0 0-5 M7 22v-1a5 5 0 0 1 10 0v1";
+                tip: I18n.t("bar.pointerMark");
+                on: Editor.analysis-tool == 4;
+                clicked => { Editor.analysis-tool-picked(4); }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 3px;
+            BarButton {
+                icon: "M3 7V3h4 M17 3h4v4 M21 17v4h-4 M7 21H3v-4 M12 8a2 2 0 1 0 0 4a2 2 0 1 0 0-4 M9 17a3 3 0 0 1 6 0";
+                tip: I18n.t("bar.frame");
+                on: Editor.analysis-tool == 5;
+                clicked => { Editor.analysis-tool-picked(5); }
+            }
+
+            BarButton {
+                icon: "M12 3a3 3 0 1 0 0 6a3 3 0 1 0 0-6 M7 20a5 5 0 0 1 10 0 M4 4l16 16";
+                tip: I18n.t("bar.erase");
+                on: Editor.analysis-tool == 6;
+                clicked => { Editor.analysis-tool-picked(6); }
+            }
+        }
+
+        Rule { }
+
+        HorizontalLayout {
+            spacing: 3px;
+            BarButton {
+                icon: "M5 19L19 5";
+                tip: I18n.t("bar.line");
+                on: Editor.analysis-tool == 10;
+                clicked => { Editor.analysis-tool-picked(10); }
+            }
+
+            BarButton {
+                icon: "M5 19L19 5 M10 5h9v9";
+                tip: I18n.t("bar.arrow");
+                on: Editor.analysis-tool == 11;
+                clicked => { Editor.analysis-tool-picked(11); }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 3px;
+            BarButton {
+                icon: "M4 19C6 8 14 5 19 9 M15 5l4 4-5 1";
+                tip: I18n.t("bar.curve");
+                on: Editor.analysis-tool == 12;
+                clicked => { Editor.analysis-tool-picked(12); }
+            }
+
+            BarButton {
+                icon: "M4 9l7-5 9 4-2 11-12 2z";
+                tip: I18n.t("bar.zone");
+                on: Editor.analysis-tool == 13;
+                clicked => { Editor.analysis-tool-picked(13); }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 3px;
+            BarButton {
+                icon: "M5 5a2 2 0 1 0 0 4a2 2 0 1 0 0-4 M12 14a2 2 0 1 0 0 4a2 2 0 1 0 0-4 M19 6a2 2 0 1 0 0 4a2 2 0 1 0 0-4 M6.2 8.6l4.6 6 M13.4 14.5l4.4-5.6";
+                tip: I18n.t("bar.link");
+                on: Editor.analysis-tool == 14;
+                clicked => { Editor.analysis-tool-picked(14); }
+            }
+
+            BarButton {
+                icon: "M12 2v20 M3.3 7l17.4 10 M3.3 17L20.7 7 M9 3.5l3 2 3-2 M9 20.5l3-2 3 2";
+                tip: I18n.t("bar.freeze");
+                clicked => { Editor.draw-freeze(); }
+            }
+        }
+
+        Rule { }
+
+        HorizontalLayout {
+            spacing: 3px;
+            BarButton {
+                icon: "M9 14L4 9l5-5 M4 9h11a5 5 0 0 1 0 10h-3";
+                tip: I18n.t("bar.undo");
+                clicked => { Editor.analysis-undo(); }
+            }
+
+            BarButton {
+                icon: "M3 6h18 M8 6V4h8v2 M6 6l1 14h10l1-14 M10 10v6 M14 10v6";
+                tip: I18n.t("bar.clear");
+                clicked => { Editor.analysis-clear(); }
+            }
+        }
+    }
+}
+
+/// The line over the stage: what the tool out does next, the analysis at
+/// work, and Finish for a zone or a link.
+export component AnalysisHint inherits Rectangle {
+    property <bool> busy: Editor.analysis-progress >= 0;
+    property <bool> clicking: Editor.analysis-tool == 13 || Editor.analysis-tool == 14;
+    property <string> message: root.busy
+        ? (Editor.analysis-silhouettes ? I18n.t("football.silhouettes") : I18n.t("football.analysing"))
+            + " \{Math.round(Editor.analysis-progress * 100)}%"
+        : Editor.analysis-tool >= 1 && Editor.analysis-tool <= 6
+            ? (Editor.analysis-ready ? I18n.t("bar.hintPlayer") : I18n.t("bar.hintFirstClick"))
+        : root.clicking ? I18n.t1("bar.hintPoints", "\{Editor.analysis-points}")
+        : Editor.analysis-tool >= 10 ? I18n.t("bar.hintDrag")
+        : "";
+
+    visible: root.message != "";
+    height: 30px;
+    width: row.preferred-width;
+    border-radius: 15px;
+    background: #141414e6;
+    border-width: 1px;
+    border-color: #ffffff1a;
+
+    row := HorizontalLayout {
+        padding-left: 14px;
+        padding-right: root.clicking && Editor.analysis-points > 0 ? 4px : 14px;
+        spacing: 10px;
+
+        if root.busy: Rectangle {
+            width: 60px;
+            height: 4px;
+            y: (parent.height - self.height) / 2;
+            border-radius: 2px;
+            background: #ffffff26;
+            Rectangle {
+                x: 0;
+                width: parent.width * Math.max(0, Math.min(1, Editor.analysis-progress));
+                height: parent.height;
+                border-radius: 2px;
+                background: Theme.accent;
+            }
+        }
+
+        Text {
+            text: root.message;
+            color: #f2f2f2;
+            font-size: 12px;
+            vertical-alignment: center;
+        }
+
+        if root.clicking && Editor.analysis-points > 0: Rectangle {
+            width: finish-label.preferred-width + 20px;
+            height: 22px;
+            y: (parent.height - self.height) / 2;
+            border-radius: 11px;
+            background: finish-touch.has-hover ? Theme.accent-hover : Theme.accent;
+            finish-label := Text {
+                text: I18n.t("draw.finish");
+                color: #111111;
+                font-size: 12px;
+                font-weight: 600;
+            }
+            finish-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { Editor.draw-finish(); }
+            }
+        }
+    }
+}

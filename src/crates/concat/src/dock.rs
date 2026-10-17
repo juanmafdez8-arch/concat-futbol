@@ -283,6 +283,28 @@ pub fn default_dock() -> Dock {
     }
 }
 
+/// The analysis workspace: the monitor large on the left, the tagging pane
+/// over the inspector on the right, the timeline along the bottom - the
+/// layout Sportscode, Nacsport and Metrica open a match in.
+pub fn analysis_dock() -> Dock {
+    Dock::Split {
+        columns: false,
+        ratio: 0.68,
+        first: Box::new(Dock::Split {
+            columns: true,
+            ratio: 0.66,
+            first: Dock::leaf(PaneKind::Preview),
+            second: Box::new(Dock::Split {
+                columns: false,
+                ratio: 0.58,
+                first: Dock::leaf(PaneKind::Tagging),
+                second: Dock::leaf(PaneKind::Inspector),
+            }),
+        }),
+        second: Dock::leaf(PaneKind::Timeline),
+    }
+}
+
 /// The top edge of a row, measured down the stack from the first lane.
 /// The dock a narrow window shows: the monitor over the timeline, and
 /// nothing beside either. The library and the inspector are a switch away

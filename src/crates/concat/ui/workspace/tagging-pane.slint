@@ -166,13 +166,25 @@ export component TaggingPane inherits Pane {
                     }
                 }
 
-                VerticalLayout {
+                HorizontalLayout {
+                    spacing: 6px;
+                    alignment: end;
+                    VerticalLayout {
+                        alignment: center;
+                        Button {
+                            label: Editor.analysis-workspace ? I18n.t("bar.editWorkspace") : I18n.t("bar.workspaceShort");
+                            ghost: true;
+                            clicked => { Editor.analysis-workspace-toggled(); }
+                        }
+                    }
+                    VerticalLayout {
                     alignment: center;
                     Button {
                         label: Editor.tag-editing ? I18n.t("tag.done") : I18n.t("tag.editTemplate");
                         ghost: !Editor.tag-editing;
                         primary: Editor.tag-editing;
                         clicked => { Editor.tag-edit(!Editor.tag-editing); }
+                    }
                     }
                 }
             }
@@ -336,6 +348,78 @@ export component TaggingPane inherits Pane {
                                 pressed => { Editor.tag-press(row * root.across + column); }
                             }
                         }
+                    }
+                }
+
+                // ── the matrix: a row per category, every register a bar
+                // across the timeline, the playhead over them ──
+                if !Editor.tag-editing && Editor.tag-buttons.length > 0: Rectangle {
+                    height: Editor.tag-buttons.length * 16px + 8px;
+                    border-radius: 6px;
+                    background: Theme.field;
+                    clip: true;
+
+                    property <length> label-w: 92px;
+                    property <length> track-w: self.width - self.label-w - 8px;
+                    property <float> span: Math.max(1, Editor.duration-seconds);
+
+                    for button[row] in Editor.tag-buttons: Rectangle {
+                        x: 0;
+                        y: 4px + row * 16px;
+                        width: parent.width;
+                        height: 16px;
+                        background: Math.mod(row, 2) == 0 ? transparent : #ffffff08;
+
+                        Rectangle {
+                            x: 6px;
+                            width: 6px;
+                            height: 6px;
+                            border-radius: 3px;
+                            background: button.colour;
+                        }
+
+                        Text {
+                            x: 16px;
+                            width: 72px;
+                            text: button.name;
+                            color: Theme.fg-muted;
+                            font-size: 10px;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                    }
+
+                    // A click on a row's empty stretch sends the playhead there.
+                    TouchArea {
+                        x: parent.label-w;
+                        width: parent.track-w;
+                        mouse-cursor: pointer;
+                        clicked => {
+                            Editor.seek(Math.max(0, self.mouse-x / self.width) * parent.span);
+                        }
+                    }
+
+                    for bar in Editor.tag-bars: Rectangle {
+                        x: parent.label-w + bar.start / parent.span * parent.track-w;
+                        y: 6px + bar.row * 16px;
+                        width: Math.max(3px, (bar.end - bar.start) / parent.span * parent.track-w);
+                        height: 12px;
+                        border-radius: 2px;
+                        background: bar.colour.with-alpha(bar.current ? 1 : 0.8);
+                        border-width: bar.current ? 1px : 0px;
+                        border-color: #ffffff;
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { Editor.tag-select(bar.id); }
+                        }
+                    }
+
+                    Rectangle {
+                        x: parent.label-w + Editor.playhead / parent.span * parent.track-w;
+                        y: 0;
+                        width: 1px;
+                        height: parent.height;
+                        background: Theme.playhead;
                     }
                 }
 

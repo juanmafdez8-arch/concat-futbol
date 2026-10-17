@@ -13,6 +13,8 @@ import { Pane, PaneHeader } from "pane.slint";
 import { PaneKind, PaneSwitcher } from "pane-switcher.slint";
 import { ClipKind, StageGuideData, StageItemData } from "../timeline/model.slint";
 import { ContextMenu, MenuMetrics, MenuRow } from "../primitives/context-menu.slint";
+import { AnalysisBar, AnalysisHint } from "analysis-bar.slint";
+import { Editor } from "../editor.slint";
 
 // The programme monitor: a header that says what the output is, a stage on a
 // sunken viewport, and a transport tray under it in three parts — timecode on
@@ -965,6 +967,18 @@ export component PreviewPane inherits Rectangle {
                     frame-menu.request-y = self.absolute-position.y - root.absolute-position.y + y;
                     root.frame-token += 1;
                 }
+            }
+
+            // The analysis toolbar down the stage's left edge, over the
+            // picture, and the line saying what the tool out does next
+            // across its top. Not over a library file, which has no marks.
+            if Editor.analysis-available && root.source-name == "": AnalysisBar {
+                x: Math.max(4px, stage.x - self.width - 8px);
+                y: Math.max(stage.y, stage.y + (stage.height - self.height) / 2);
+            }
+            if Editor.analysis-available && root.source-name == "": AnalysisHint {
+                x: stage.x + (stage.width - self.width) / 2;
+                y: stage.y + 10px;
             }
 
             // A library file on the monitor: its name, and the cross that

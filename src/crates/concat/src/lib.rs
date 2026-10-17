@@ -273,6 +273,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
         editor.set_tag_chips(ModelRc::from(models.tag_chips.clone()));
         editor.set_tag_rows(ModelRc::from(models.tag_rows.clone()));
         editor.set_tag_filter_options(ModelRc::from(models.tag_filter_options.clone()));
+        editor.set_tag_bars(ModelRc::from(models.tag_bars.clone()));
         app.global::<Library>()
             .set_views(ModelRc::from(models.library_views.clone()));
         editor.set_menu_items(ModelRc::from(models.menu.clone()));
@@ -1297,6 +1298,21 @@ pub fn run() -> Result<(), slint::PlatformError> {
     }));
     editor.on_tag_import(on_window!(|state| {
         state.tag_import();
+    }));
+    editor.on_analysis_tool_picked(on_window!(|state, id: i32| {
+        state.analysis_tool_pick(id);
+    }));
+    editor.on_analysis_colour_next(on_window!(|state| {
+        state.analysis_colour_next();
+    }));
+    editor.on_analysis_undo(on_window!(|state| {
+        state.undo();
+    }));
+    editor.on_analysis_clear(on_window!(|state| {
+        state.analysis_clear();
+    }));
+    editor.on_analysis_workspace_toggled(on_window!(|state| {
+        state.toggle_analysis_workspace();
     }));
     editor.on_clip_enhance_set(on_window!(|state, on: bool| {
         state.clip_enhance_set(on);

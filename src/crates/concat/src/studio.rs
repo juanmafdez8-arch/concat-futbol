@@ -631,6 +631,7 @@ pub struct Models {
     pub tag_chips: Rc<VecModel<TagChipData>>,
     pub tag_rows: Rc<VecModel<TagRowData>>,
     pub tag_filter_options: Rc<VecModel<SharedString>>,
+    pub tag_bars: Rc<VecModel<TagBarData>>,
     pub library_views: Rc<VecModel<LibraryViewData>>,
     pub menu: Rc<VecModel<MenuItemData>>,
     pub bar: Rc<VecModel<MenuItemData>>,
@@ -704,6 +705,7 @@ impl Models {
             tag_chips: Rc::new(VecModel::default()),
             tag_rows: Rc::new(VecModel::default()),
             tag_filter_options: Rc::new(VecModel::default()),
+            tag_bars: Rc::new(VecModel::default()),
             library_views: Rc::new(VecModel::default()),
             menu: Rc::new(VecModel::default()),
             bar: Rc::new(VecModel::default()),
@@ -997,6 +999,17 @@ pub struct Studio {
     /// A zone or a link being clicked out: its clip, its points, and where
     /// they were on the stage.
     draw_draft: Option<(String, Vec<model::Anchor>, Vec<(f32, f32)>)>,
+
+    // ── the analysis toolbar ──
+    /// The tool out on the monitor's toolbar; see `analysis_tool_pick`.
+    pub analysis_tool: i32,
+    /// The toolbar's colour, as a row of `MARK_COLOURS`.
+    pub analysis_colour: usize,
+    /// A player tool's press kept while the players are being found: the
+    /// clip, the source point, the source instant and the mark.
+    football_pending: Option<(String, f32, f32, f64, model::MarkStyle)>,
+    /// The dock the analysis workspace replaced, while it is showing.
+    dock_before_analysis: Option<Dock>,
 
     // ── tagging ──
     /// The register in hand: the last one made or picked, by id.
@@ -2152,6 +2165,10 @@ impl Studio {
             brush_size: 0.06,
             painting: true,
             cutout_jobs: HashMap::new(),
+            analysis_tool: 0,
+            analysis_colour: 3,
+            football_pending: None,
+            dock_before_analysis: None,
             tag_current: None,
             tag_filter: None,
             tag_min_rating: 0,
@@ -5245,6 +5262,9 @@ impl Studio {
     /// of everything selected that is under the playhead. Empty stage
     /// clears the selection, as an empty lane does.
     pub fn stage_pressed(&mut self, x: f32, y: f32, additive: bool) {
+        if self.mark_press(x, y) {
+            return;
+        }
         if self.draw_press(x, y) {
             return;
         }
@@ -6196,6 +6216,235 @@ impl Studio {
         }
     }
 
+    // ── the analysis toolbar ──
+    //
+    // The monitor's own toolbar, the way Metrica Play and KlipDraw put the
+    // tools on the picture rather than in a panel: one tool out at a time,
+    // and the picture is where it is used. A player tool is a click on the
+    // player - the analysis runs first if the footage has none, and the
+    // click lands when it is done; a drawing tool is a drag, or a click per
+    // point and Finish. One colour for all of them, cycled on the toolbar.
+    // The inspector's sections remain for the knobs.
+
+    /// The toolbar's player tools by their ids, as mark styles.
+    fn mark_tool(&self) -> Option<model::MarkStyle> {
+        match self.analysis_tool {
+            1 => Some(model::MarkStyle::Spotlight),
+            2 => Some(model::MarkStyle::Shade),
+            3 => Some(model::MarkStyle::Ring),
+            4 => Some(model::MarkStyle::Arrow),
+            5 => Some(model::MarkStyle::Frame),
+            6 => Some(model::MarkStyle::Erase),
+            _ => None,
+        }
+    }
+
+    /// A tool picked on the toolbar: 0 the pointer; 1 to 6 the player
+    /// tools (spotlight, shade, ring, arrow, frame, erase); 10 to 14 the
+    /// drawings (line, arrow, curve, zone, link). Picking the tool already
+    /// out puts it away.
+    pub fn analysis_tool_pick(&mut self, id: i32) {
+        let id = if id == self.analysis_tool { 0 } else { id };
+        self.analysis_tool = id;
+        self.draw_draft = None;
+        self.painting = false;
+        match id {
+            10..=14 => {
+                self.draw_tool = Some((id - 10) as usize);
+                self.football_picking = false;
+            }
+            1..=6 => {
+                self.draw_tool = None;
+                // The players outlined, so the eye finds what to click.
+                self.football_picking = true;
+            }
+            _ => {
+                self.draw_tool = None;
+                self.football_picking = false;
+            }
+        }
+        self.request_preview();
+    }
+
+    /// The toolbar's colour, the next of the palette round; the chosen
+    /// player's marks on the selected clip take it too.
+    pub fn analysis_colour_next(&mut self) {
+        self.analysis_colour = (self.analysis_colour + 1) % Self::MARK_COLOURS.len();
+        self.draw_style.colour = Self::MARK_COLOURS[self.analysis_colour];
+        if self.football_chosen.is_some() {
+            self.football_colour(self.analysis_colour as i32);
+        }
+    }
+
+    /// Every mark and drawing off the selected clip, as one undo step.
+    pub fn analysis_clear(&mut self) {
+        self.draw_draft = None;
+        let Some(id) = self.sole_selection() else {
+            return;
+        };
+        let Some(clip) = self.clip(&id).cloned() else {
+            return;
+        };
+        let mut commands = Vec::new();
+        if !clip.football.is_empty() {
+            commands.push(Command::SetClipFootball {
+                clip_id: id.clone(),
+                marks: Vec::new(),
+            });
+        }
+        if !clip.drawings.is_empty() {
+            commands.push(Command::SetClipDrawings {
+                clip_id: id,
+                drawings: Vec::new(),
+            });
+        }
+        if !commands.is_empty() {
+            self.apply(Command::Batch { commands });
+        }
+    }
+
+    /// The picture a toolbar click acts on: the one selected if it is on
+    /// the stage, else the topmost picture under the click, which becomes
+    /// the selection.
+    fn analysis_target(&mut self, x: f32, y: f32) -> Option<Clip> {
+        if let Some(clip) = self.sole_selection().and_then(|id| self.clip(&id).cloned())
+            && clip.kind.is_visual()
+            && self.stage_clips().into_iter().any(|shown| shown.id == clip.id)
+        {
+            return Some(clip);
+        }
+        let id = self.stage_hit(f64::from(x), f64::from(y))?;
+        let clip = self.clip(&id).cloned()?;
+        if !clip.kind.is_visual() {
+            return None;
+        }
+        self.selection = vec![id];
+        Some(clip)
+    }
+
+    /// A press on the stage with a player tool out: the mark on the
+    /// player under it, or off him when he wears it already. With no
+    /// analysis yet the press is kept, the analysis started, and the mark
+    /// put on when the players are found. `false` when no player tool is
+    /// out, so the press does what it would have.
+    fn mark_press(&mut self, x: f32, y: f32) -> bool {
+        let Some(style) = self.mark_tool() else {
+            return false;
+        };
+        let Some(clip) = self.analysis_target(x, y) else {
+            return true;
+        };
+        let Some(request) = self.football_request(&clip.id) else {
+            self.notify(&t("football.needsFootage"), true);
+            return true;
+        };
+        let [u, v] = self.stage_to_source(&clip, f64::from(x), f64::from(y));
+        let at = self.source_at_playhead(&clip);
+        if !request.analysed() {
+            self.football_pending = Some((clip.id.clone(), u as f32, v as f32, at, style));
+            if self.football_job.is_none() {
+                self.football_analyse();
+            }
+            return true;
+        }
+        self.mark_player_at(&clip.id, u as f32, v as f32, at, style);
+        true
+    }
+
+    /// The mark `style` on, or off, the player at source point `(u, v)` at
+    /// source instant `at` of clip `id`.
+    fn mark_player_at(&mut self, id: &str, u: f32, v: f32, at: f64, style: model::MarkStyle) {
+        let Some(request) = self.football_request(id) else {
+            return;
+        };
+        let Some(set) = concat_vision::football::shared(&request.dir()) else {
+            return;
+        };
+        let Some(tracked) = set.pick(at, u, v) else {
+            self.notify(&t("football.nobodyThere"), true);
+            return;
+        };
+        self.football_chosen = Some(tracked.id);
+        let Some(clip) = self.clip(id).cloned() else {
+            return;
+        };
+        let mut marks = clip.football.clone();
+        match marks
+            .iter()
+            .position(|mark| mark.track == tracked.id && mark.style == style)
+        {
+            Some(index) => {
+                marks.remove(index);
+            }
+            None => {
+                let mut mark = model::FootballMark::new(tracked.id, style);
+                mark.colour = Self::MARK_COLOURS[self.analysis_colour];
+                marks.push(mark);
+            }
+        }
+        self.apply(Command::SetClipFootball {
+            clip_id: id.to_owned(),
+            marks,
+        });
+    }
+
+    /// The press kept while the players were being found, put on now.
+    fn land_pending_mark(&mut self) {
+        if let Some((id, u, v, at, style)) = self.football_pending.take() {
+            self.mark_player_at(&id, u, v, at, style);
+        }
+    }
+
+    /// The analysis workspace, or back to the one it replaced: the monitor
+    /// large, the tagging pane and the inspector beside it, the timeline
+    /// along the bottom - the layout every analysis tool opens with.
+    pub fn toggle_analysis_workspace(&mut self) {
+        match self.dock_before_analysis.take() {
+            Some(before) => self.dock = before,
+            None => {
+                self.dock_before_analysis =
+                    Some(std::mem::replace(&mut self.dock, crate::dock::analysis_dock()));
+            }
+        }
+    }
+
+    /// Whether the analysis workspace is the one showing.
+    pub fn analysis_workspace(&self) -> bool {
+        self.dock_before_analysis.is_some()
+    }
+
+    /// The toolbar's state, published.
+    fn publish_analysis(&self, editor: &Editor<'_>) {
+        let selected = self.sole_selection().and_then(|id| self.clip(&id).cloned());
+        let available = selected.as_ref().is_some_and(|clip| clip.kind.is_visual())
+            || self.stage_clips().iter().any(|clip| clip.kind.is_visual());
+        editor.set_analysis_available(available);
+        editor.set_analysis_tool(self.analysis_tool);
+        let [r, g, b] = Self::MARK_COLOURS[self.analysis_colour];
+        editor.set_analysis_colour(slint::Color::from_rgb_u8(r, g, b));
+        editor.set_analysis_ready(
+            selected
+                .as_ref()
+                .is_some_and(|clip| self.football_analysed(&clip.id)),
+        );
+        editor.set_analysis_progress(
+            self.football_job
+                .as_ref()
+                .map_or(-1.0, |(_, _, fraction)| *fraction),
+        );
+        editor.set_analysis_silhouettes(
+            self.football_job
+                .as_ref()
+                .is_some_and(|(what, _, _)| what == "silhouettes"),
+        );
+        editor.set_analysis_points(
+            self.draw_draft
+                .as_ref()
+                .map_or(0, |(_, anchors, _)| anchors.len() as i32),
+        );
+        editor.set_analysis_workspace(self.analysis_workspace());
+    }
+
     // ── tagging ──
     //
     // Nacsport's way of marking a match: a button per category, pressed as
@@ -6594,6 +6843,31 @@ impl Studio {
             .collect()
     }
 
+    /// The tagging pane's matrix: every register as a bar on its
+    /// category's row, across the timeline, whatever the list's filter.
+    fn tag_bars(&self) -> Vec<TagBarData> {
+        let template = self.tag_template();
+        self.timeline()
+            .plays
+            .iter()
+            .filter_map(|play| {
+                let row = template
+                    .categories
+                    .iter()
+                    .position(|category| category.name == play.tag)?;
+                let [r, g, b] = template.categories[row].colour;
+                Some(TagBarData {
+                    row: row as i32,
+                    start: play.start as f32,
+                    end: play.end as f32,
+                    colour: slint::Color::from_rgb_u8(r, g, b),
+                    id: play.id.clone().into(),
+                    current: self.tag_current.as_deref() == Some(play.id.as_str()),
+                })
+            })
+            .collect()
+    }
+
     /// The tagging pane's list.
     fn tag_rows(&self) -> Vec<TagRowData> {
         let template = self.tag_template();
@@ -6619,6 +6893,7 @@ impl Studio {
         sync(&models.tag_buttons, self.tag_buttons());
         sync(&models.tag_chips, self.tag_chips());
         sync(&models.tag_rows, self.tag_rows());
+        sync(&models.tag_bars, self.tag_bars());
         let template = self.tag_template();
         let options: Vec<SharedString> = std::iter::once(t("tag.all").into())
             .chain(template.categories.iter().map(|category| category.name.clone().into()))
@@ -7105,6 +7380,16 @@ impl Studio {
             "play-prev" => self.jump_play(false),
             "play-next" => self.jump_play(true),
             "highlights" => self.build_highlights(None),
+            "workspace-analysis" => self.toggle_analysis_workspace(),
+            "pointer-tool" => self.analysis_tool_pick(0),
+            "back-five" => {
+                let at = (self.playhead - 5.0).max(0.0);
+                self.seek(at);
+            }
+            "forward-five" => {
+                let at = (self.playhead + 5.0).min(self.duration());
+                self.seek(at);
+            }
             other => {
                 if let Some(tag) = other.strip_prefix("play-add:") {
                     self.add_play(tag);
@@ -7300,6 +7585,7 @@ impl Studio {
                         // gone; every marked player is read again.
                         studio.football_tried.clear();
                         studio.notify(&t("football.analysed"), false);
+                        studio.land_pending_mark();
                         studio.request_preview();
                         studio.ensure_football_silhouettes();
                     }
@@ -9827,6 +10113,7 @@ impl Studio {
         sync(&models.key_marks, self.key_marks());
         sync(&models.play_marks, self.montage_marks());
         self.publish_tagging(&editor, models);
+        self.publish_analysis(&editor);
         editor.set_mark_in(self.mark_in.unwrap_or(-1.0));
         editor.set_mark_out(self.mark_out.unwrap_or(-1.0));
         editor.set_scroll_left(self.lanes.scroll_left);
@@ -12006,6 +12293,12 @@ impl Studio {
                     true,
                 ),
                 row("end", t("common.goToEnd"), Glyph::SkipForward, "End", true),
+                rule(),
+                check(
+                    "workspace-analysis",
+                    &t("bar.workspace"),
+                    self.analysis_workspace(),
+                ),
             ],
             3 => self.montage_menu(),
             _ => Vec::new(),
@@ -12301,7 +12594,8 @@ impl Studio {
             }
             // Q W I O X E R P [ ]: the Montage menu's keys.
             "delete-left" | "delete-right" | "mark-in" | "mark-out" | "clear-marks"
-            | "extract" | "lift" | "play-add" | "play-prev" | "play-next" => {
+            | "extract" | "lift" | "play-add" | "play-prev" | "play-next" | "pointer-tool"
+            | "back-five" | "forward-five" => {
                 self.montage_action(action)
             }
             _ => {}

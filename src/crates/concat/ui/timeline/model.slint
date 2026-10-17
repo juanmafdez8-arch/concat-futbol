@@ -290,6 +290,16 @@ export struct TagChipData {
     on: bool,
 }
 
+/// A register on the tagging pane's matrix: its category's row, its span.
+export struct TagBarData {
+    row: int,
+    start: float,
+    end: float,
+    colour: color,
+    id: string,
+    current: bool,
+}
+
 /// A register in the tagging pane's list.
 export struct TagRowData {
     id: string,

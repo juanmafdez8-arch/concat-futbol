@@ -14,7 +14,7 @@ import { PaneKind } from "workspace/pane-switcher.slint";
 import { MenuItemData } from "primitives/context-menu.slint";
 import {
     ClipData, ClipField, ClipTextField, DropData, PlayMarkData, SelectedClipData, SelectedTransitionData,
-    TagButtonData, TagChipData, TagRowData,
+    TagBarData, TagButtonData, TagChipData, TagRowData,
     StageGuideData, StageItemData, TimelineTabData, TimelineTool, TrackData,
     TrackSize,
 } from "timeline/model.slint";
@@ -387,6 +387,24 @@ export global Editor {
     /// Sportscode XML edit list in.
     callback tag-export(xml: bool);
     callback tag-import();
+    in-out property <[TagBarData]> tag-bars;
+
+    /// The monitor's analysis toolbar; see Studio's analysis toolbar.
+    /// `analysis-tool` is 0 the pointer, 1 to 6 the player tools, 10 to
+    /// 14 the drawings; `analysis-progress` is -1 with no analysis at work.
+    in-out property <bool> analysis-available;
+    in-out property <int> analysis-tool;
+    in-out property <color> analysis-colour: #f1c40f;
+    in-out property <bool> analysis-ready;
+    in-out property <float> analysis-progress: -1;
+    in-out property <bool> analysis-silhouettes;
+    in-out property <int> analysis-points;
+    in-out property <bool> analysis-workspace;
+    callback analysis-tool-picked(id: int);
+    callback analysis-colour-next();
+    callback analysis-undo();
+    callback analysis-clear();
+    callback analysis-workspace-toggled();
     in-out property <float> frame-rate;
     in-out property <float> scroll-left;
     in-out property <float> seconds-per-pixel;
