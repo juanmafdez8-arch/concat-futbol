@@ -196,9 +196,19 @@ impl Detectors {
     }
 
     /// Everything both models find in `frame`.
+    /// The general model is asked only when the football model has not
+    /// seen the ball surely: it costs as much as the football model again,
+    /// and most frames do not need it.
     pub fn detect(&self, frame: &Frame) -> Result<Vec<Detection>, String> {
+        /// A ball the football model is this sure of needs no second look.
+        const SURE_BALL: f32 = 0.3;
         let mut found = self.people.detect(frame)?;
-        if let Some(ball) = &self.ball {
+        let sure = found
+            .iter()
+            .any(|detection| detection.kind == Kind::Ball && detection.score >= SURE_BALL);
+        if let Some(ball) = &self.ball
+            && !sure
+        {
             found.extend(ball.detect(frame)?);
             found = suppress(found);
         }
@@ -352,6 +362,135 @@ pub fn silhouette(
                     bytes[(y * width + x) as usize] = (best.sample(cu, cv) * 255.0 + 0.5) as u8;
                 }
             }
+        }
+    }
+    Ok(out)
+}
+
+/// Silhouettes for up to four shots at a time - a frame and the box of the
+/// thing in it - read by the brush model in one pass: the crops round the
+/// boxes are laid out two by two on one 1024 square, the encoder - the
+/// expensive half - reads the square once, and the decoder is prompted
+/// tile by tile. Each answer is a quarter of the resolution a crop of its
+/// own would get, which a feathered mark does not show, at a quarter of
+/// the cost. `None` where the model found nothing that fits its box.
+pub fn silhouettes(
+    brush: &Brush,
+    shots: &[(&Frame, [f32; 4])],
+    mask_width: u32,
+) -> Result<Vec<Option<Mask>>, String> {
+    const CANVAS: u32 = 1024;
+    const TILE: u32 = CANVAS / 2;
+    let mut out = Vec::with_capacity(shots.len());
+    for group in shots.chunks(4) {
+        let mut canvas = Frame::black(CANVAS, CANVAS);
+        // Where each shot's crop came from and where it went: the source
+        // pixel box, the scale, and the tile's corner on the canvas.
+        let mut placed: Vec<Option<(u32, u32, f32, u32, u32)>> = Vec::new();
+        for (index, (frame, bbox)) in group.iter().enumerate() {
+            let (fw, fh) = (frame.width() as f32, frame.height() as f32);
+            let [l, t, r, b] = *bbox;
+            let side = (((r - l) * fw).max((b - t) * fh) * 2.0).max(96.0);
+            let (cx, cy) = ((l + r) * 0.5 * fw, (t + b) * 0.5 * fh);
+            let x0 = (cx - side * 0.5).clamp(0.0, (fw - 1.0).max(0.0)) as u32;
+            let y0 = (cy - side * 0.5).clamp(0.0, (fh - 1.0).max(0.0)) as u32;
+            let x1 = ((cx + side * 0.5).ceil() as u32).min(frame.width());
+            let y1 = ((cy + side * 0.5).ceil() as u32).min(frame.height());
+            if x1 <= x0 + 1 || y1 <= y0 + 1 {
+                placed.push(None);
+                continue;
+            }
+            let scale = TILE as f32 / (x1 - x0).max(y1 - y0) as f32;
+            let (ox, oy) = ((index as u32 % 2) * TILE, (index as u32 / 2) * TILE);
+            let (sw, sh) = (
+                ((x1 - x0) as f32 * scale) as u32,
+                ((y1 - y0) as f32 * scale) as u32,
+            );
+            let source = frame.pixels();
+            let width = frame.width() as usize;
+            let target = canvas.pixels_mut();
+            for y in 0..sh.min(TILE) {
+                let sy = (y0 + (y as f32 / scale) as u32).min(y1 - 1) as usize;
+                for x in 0..sw.min(TILE) {
+                    let sx = (x0 + (x as f32 / scale) as u32).min(x1 - 1) as usize;
+                    let from = (sy * width + sx) * BYTES_PER_PIXEL;
+                    let to = (((oy + y) * CANVAS + ox + x) as usize) * BYTES_PER_PIXEL;
+                    target[to..to + BYTES_PER_PIXEL]
+                        .copy_from_slice(&source[from..from + BYTES_PER_PIXEL]);
+                }
+            }
+            placed.push(Some((x0, y0, scale, ox, oy)));
+        }
+        let embedding = brush.embed(&canvas)?;
+        for ((frame, bbox), place) in group.iter().zip(&placed) {
+            let Some((x0, y0, scale, ox, oy)) = *place else {
+                out.push(None);
+                continue;
+            };
+            let (fw, fh) = (frame.width() as f32, frame.height() as f32);
+            // A source fraction to a canvas fraction.
+            let to_canvas = |u: f32, v: f32| -> (f32, f32) {
+                (
+                    ((u * fw - x0 as f32) * scale + ox as f32) / CANVAS as f32,
+                    ((v * fh - y0 as f32) * scale + oy as f32) / CANVAS as f32,
+                )
+            };
+            let [l, t, r, b] = *bbox;
+            let (il, it) = to_canvas(l, t);
+            let (ir, ib) = to_canvas(r, b);
+            let (tile_l, tile_t) = (ox as f32 / CANVAS as f32, oy as f32 / CANVAS as f32);
+            let (tile_r, tile_b) = (tile_l + 0.5, tile_t + 0.5);
+            let clamp_x = |x: f32| f64::from(x.clamp(tile_l, tile_r - 1e-3));
+            let clamp_y = |y: f32| f64::from(y.clamp(tile_t, tile_b - 1e-3));
+            let mid = (il + ir) * 0.5;
+            let span = (ir - il).max(0.01);
+            let positives = [
+                [clamp_x(mid), clamp_y(it + (ib - it) * 0.25)],
+                [clamp_x(mid), clamp_y(it + (ib - it) * 0.45)],
+                [clamp_x(mid), clamp_y(it + (ib - it) * 0.7)],
+            ];
+            let negatives = [
+                [clamp_x(il - span * 0.6), clamp_y((it + ib) * 0.5)],
+                [clamp_x(ir + span * 0.6), clamp_y((it + ib) * 0.5)],
+                [clamp_x(mid), clamp_y(ib + (ib - it) * 0.15)],
+            ];
+            let candidates = brush.prompted(&embedding, &positives, &negatives)?;
+            let target_box = [il, it, ir, ib];
+            let best = candidates
+                .into_iter()
+                .map(|(score, mask)| {
+                    let fit = extent(&mask)
+                        .map(|found| iou(&found, &target_box))
+                        .unwrap_or(0.0);
+                    (fit, score, mask)
+                })
+                .max_by(|a, b| (a.0 + a.1 * 0.1).total_cmp(&(b.0 + b.1 * 0.1)));
+            let Some((_, _, best)) = best.filter(|(fit, _, _)| *fit > 0.2) else {
+                out.push(None);
+                continue;
+            };
+            // Laid into a mask over the whole source, held to the grown box
+            // so a neighbour in the same tile never comes along.
+            let width = mask_width.max(16);
+            let height = ((width as f32 * fh / fw).round() as u32).max(9);
+            let mut mask = Mask::filled(width, height, 0);
+            let grown = super::grown(bbox, 0.2);
+            let bytes = mask.bytes_mut();
+            let px0 = (grown[0].max(0.0) * width as f32) as u32;
+            let px1 = ((grown[2].min(1.0) * width as f32).ceil() as u32).min(width);
+            let py0 = (grown[1].max(0.0) * height as f32) as u32;
+            let py1 = ((grown[3].min(1.0) * height as f32).ceil() as u32).min(height);
+            for y in py0..py1 {
+                let v = (y as f32 + 0.5) / height as f32;
+                for x in px0..px1 {
+                    let u = (x as f32 + 0.5) / width as f32;
+                    let (cu, cv) = to_canvas(u, v);
+                    if (tile_l..tile_r).contains(&cu) && (tile_t..tile_b).contains(&cv) {
+                        bytes[(y * width + x) as usize] = (best.sample(cu, cv) * 255.0 + 0.5) as u8;
+                    }
+                }
+            }
+            out.push(Some(mask));
         }
     }
     Ok(out)

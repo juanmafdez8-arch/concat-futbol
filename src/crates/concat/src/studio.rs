@@ -7555,12 +7555,21 @@ impl Studio {
         };
         self.football_job = Some(("analyse".to_owned(), id.clone(), 0.0));
         self.football_chosen = None;
+        // The instant being looked at is analysed first; see
+        // `Footballs::analyse`.
+        let focus = self.clip(&id).map(|clip| self.source_at_playhead(clip));
         let footballs = Arc::clone(&self.host.footballs);
         let epoch = crate::host::project_epoch();
         spawn_in_project(
             move || {
                 let mut last = -1.0f32;
-                footballs.analyse(&request, &mut |progress| {
+                let mut on_window = move || {
+                    on_ui_in_project(epoch, |studio, _, _| {
+                        studio.land_pending_mark();
+                        studio.request_preview();
+                    });
+                };
+                footballs.analyse(&request, focus, &mut |progress| {
                     let now = match progress {
                         concat_host::cutout::Progress::Fetching { .. } => 0.0,
                         concat_host::cutout::Progress::Analysing(fraction) => fraction,
@@ -7573,7 +7582,7 @@ impl Studio {
                             }
                         });
                     }
-                })
+                }, &mut on_window)
             },
             |studio, _, _, result| {
                 studio.football_job = None;

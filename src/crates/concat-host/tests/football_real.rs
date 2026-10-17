@@ -58,7 +58,7 @@ fn football_on_real_footage() {
 
     let started = std::time::Instant::now();
     let analysed = footballs
-        .analyse(&request, &mut |_: Progress| {})
+        .analyse(&request, None, &mut |_: Progress| {}, &mut || {})
         .expect("analyse");
     let set = TrackSet::load(&request.dir()).expect("tracks written");
     let tracks = set.tracks();

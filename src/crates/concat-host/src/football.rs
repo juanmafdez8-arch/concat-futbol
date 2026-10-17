@@ -26,8 +26,7 @@ use std::sync::{Arc, Mutex};
 use concat_core::time::{FrameRate, Rational};
 use concat_media::{DecodeOptions, Decoder, FrameSource};
 use concat_project::model::Project;
-use concat_vision::MASK_RATE;
-use concat_vision::football::detect::{Detectors, silhouette};
+use concat_vision::football::detect::{Detectors, silhouettes};
 use concat_vision::football::{TrackSet, football_dir, silhouette_dir, track, tracks_file};
 
 use crate::brush::Brushes;
@@ -40,6 +39,15 @@ pub const DETECT_SIZE: usize = 1280;
 const SILHOUETTE_WIDTH: u32 = 1280;
 /// The widest a frame is decoded at for the brush model to crop from.
 const READ_WIDTH: u32 = 1920;
+/// The analysis's step: five instants a second. Measured on broadcast
+/// footage, the tracker keeps the same identities as at ten, and the
+/// renderer glides each mark between the instants, so the other half of
+/// the detector's work bought nothing.
+const STEP_MS: u64 = 200;
+/// The window analysed first round the instant being looked at, before
+/// and after it, in seconds.
+const WINDOW_BEFORE: f64 = 4.0;
+const WINDOW_AFTER: f64 = 16.0;
 
 /// What one analysis covers.
 #[derive(Clone, Debug)]
@@ -162,10 +170,18 @@ impl Footballs {
     /// source the request's clips show, and writes the result. Blocks for
     /// the whole run; `progress` is called as it goes. Returns how many
     /// instants were analysed.
+    ///
+    /// With a `focus` - the source instant the person is looking at - a
+    /// window round it is analysed and written first, and `on_window` is
+    /// called, so a click waiting on the players lands in a second or two
+    /// rather than after the whole match; then the rest, which keeps the
+    /// window's detections and the ids it gave.
     pub fn analyse(
         &self,
         request: &FootballRequest,
+        focus: Option<f64>,
         progress: &mut dyn FnMut(Progress),
+        on_window: &mut dyn FnMut(),
     ) -> Result<usize, String> {
         let job = self.gate.begin("football analysis")?;
         let detectors = self.detectors()?;
@@ -183,61 +199,183 @@ impl Footballs {
         if to <= from {
             return Ok(0);
         }
-        let step_ms = 1000 / u64::from(MASK_RATE);
-        let first_ms = ((from * 1000.0) as u64) / step_ms * step_ms;
-        let count = (((to * 1000.0) as u64).saturating_sub(first_ms) / step_ms + 1) as usize;
+        let dir = request.dir();
+        let before = TrackSet::load(&dir);
         let (width, height) = request.media_size;
         let (w, h) = detectors.input_size(width.max(1), height.max(1));
+        let aspect = if height > 0 {
+            width as f32 / height as f32
+        } else {
+            w as f32 / h.max(1) as f32
+        };
+        let save = |samples: Vec<concat_vision::football::Sample>| {
+            TrackSet {
+                version: 1,
+                model: detectors.name(),
+                aspect,
+                samples,
+            }
+            .save(&dir)
+        };
+
+        // The window round the focus, when the stretch is long enough for
+        // it to matter: written as soon as it is found.
+        let window = focus
+            .filter(|_| to - from > WINDOW_BEFORE + WINDOW_AFTER + 10.0)
+            .map(|focus| {
+                (
+                    (focus - WINDOW_BEFORE).max(from),
+                    (focus + WINDOW_AFTER).min(to),
+                )
+            });
+        let total = to - from;
+        let mut done = 0.0;
+        let mut frames: Vec<(u64, Vec<concat_vision::football::Detection>)> = Vec::new();
+        let mut first_ids: Option<Vec<concat_vision::football::Sample>> = None;
+        if let Some((window_from, window_to)) = window {
+            let span = window_to - window_from;
+            frames = self.detect_span(&job, &detectors, request, (w, h), window_from, window_to, &mut |f| {
+                progress(Progress::Analysing((0.9 * f as f64 * span / total) as f32));
+            })?;
+            done += span;
+            let mut samples = track::link(&frames, STEP_MS);
+            if let Some(before) = &before {
+                track::keep_ids(&before.samples, &mut samples);
+            }
+            save(samples.clone())?;
+            first_ids = Some(samples);
+            on_window();
+        }
+
+        // The rest: before the window and after it, or all of it.
+        let rest: Vec<(f64, f64)> = match window {
+            Some((window_from, window_to)) => [(from, window_from), (window_to, to)]
+                .into_iter()
+                .filter(|(a, b)| b - a > 0.05)
+                .collect(),
+            None => vec![(from, to)],
+        };
+        for (span_from, span_to) in rest {
+            let span = span_to - span_from;
+            let base = done;
+            let mut found = self.detect_span(&job, &detectors, request, (w, h), span_from, span_to, &mut |f| {
+                progress(Progress::Analysing((0.9 * (base + f as f64 * span) / total) as f32));
+            })?;
+            done += span;
+            frames.append(&mut found);
+        }
+        frames.sort_by_key(|(ms, _)| *ms);
+        frames.dedup_by_key(|(ms, _)| *ms);
+        let analysed = frames.len();
+        let mut samples = track::link(&frames, STEP_MS);
+        // The players keep the ids the window - or the last analysis -
+        // gave them, so the marks clips carry still name the same people.
+        if let Some(earlier) = first_ids.as_ref().or(before.as_ref().map(|set| &set.samples)) {
+            track::keep_ids(earlier, &mut samples);
+        }
+        save(samples)?;
+        // Only once the new analysis is safely written: the old silhouettes
+        // were read inside the old boxes, and are read again on demand.
+        if before.is_some() {
+            let _ = std::fs::remove_dir_all(dir.join("masks"));
+        }
+        progress(Progress::Analysing(1.0));
+        Ok(analysed)
+    }
+
+    /// The detections in `[from, to]` seconds of source at the analysis
+    /// rate. The decoder runs a few frames ahead on a thread of its own, so
+    /// decoding and the detectors overlap instead of taking turns.
+    fn detect_span(
+        &self,
+        job: &crate::jobs::Job,
+        detectors: &Detectors,
+        request: &FootballRequest,
+        (w, h): (u32, u32),
+        from: f64,
+        to: f64,
+        progress: &mut dyn FnMut(f32),
+    ) -> Result<Vec<(u64, Vec<concat_vision::football::Detection>)>, String> {
+        let first_ms = ((from.max(0.0) * 1000.0) as u64).div_ceil(STEP_MS) * STEP_MS;
+        let last_ms = (to.max(0.0) * 1000.0) as u64;
+        if last_ms < first_ms {
+            return Ok(Vec::new());
+        }
+        let count = ((last_ms - first_ms) / STEP_MS + 1) as usize;
         let options = DecodeOptions::default()
             .starting_at(Rational::new(first_ms as i64, 1000))
             .scaled_to(w, h)
-            .at_rate(FrameRate::new(Rational::new(i64::from(MASK_RATE), 1)))
+            .at_rate(FrameRate::new(Rational::new((1000 / STEP_MS) as i64, 1)))
             .limited_to(count as u64);
-        let mut decoder =
-            Decoder::open(&request.media_path, &options).map_err(|error| error.to_string())?;
-        progress(Progress::Analysing(0.0));
-        let mut frames = Vec::with_capacity(count);
-        for index in 0..count {
-            if job.cancelled() {
-                return Err("football analysis cancelled".to_owned());
+        let path = request.media_path.clone();
+        let (sender, receiver) = std::sync::mpsc::sync_channel::<Result<concat_core::frame::Frame, String>>(4);
+        let mut out = Vec::with_capacity(count);
+        let mut failure: Option<String> = None;
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                let mut decoder = match Decoder::open(&path, &options) {
+                    Ok(decoder) => decoder,
+                    Err(error) => {
+                        let _ = sender.send(Err(error.to_string()));
+                        return;
+                    }
+                };
+                loop {
+                    match decoder.next_frame() {
+                        Ok(Some(frame)) => {
+                            if sender.send(Ok(frame)).is_err() {
+                                return;
+                            }
+                        }
+                        Ok(None) => return,
+                        Err(error) => {
+                            let _ = sender.send(Err(error.to_string()));
+                            return;
+                        }
+                    }
+                }
+            });
+            for index in 0..count {
+                if job.cancelled() {
+                    failure = Some("football analysis cancelled".to_owned());
+                    break;
+                }
+                let frame = match receiver.recv() {
+                    Ok(Ok(frame)) => frame,
+                    Ok(Err(error)) => {
+                        failure = Some(error);
+                        break;
+                    }
+                    // The file ran out before its stated length.
+                    Err(_) => break,
+                };
+                match detectors.detect(&frame) {
+                    Ok(found) => out.push((first_ms + index as u64 * STEP_MS, found)),
+                    Err(error) => {
+                        failure = Some(error);
+                        break;
+                    }
+                }
+                progress((index + 1) as f32 / count as f32);
             }
-            let Some(frame) = decoder.next_frame().map_err(|error| error.to_string())? else {
-                break;
-            };
-            let found = detectors.detect(&frame)?;
-            frames.push((first_ms + index as u64 * step_ms, found));
-            // The last tenth is the linking and the writing.
-            progress(Progress::Analysing(0.9 * (index + 1) as f32 / count as f32));
+            // Dropping the receiver ends the decoder's thread at its next
+            // send, so the scope is never left waiting on a full channel.
+            drop(receiver);
+        });
+        match failure {
+            Some(error) => Err(error),
+            None => Ok(out),
         }
-        let analysed = frames.len();
-        let dir = request.dir();
-        let mut samples = track::link(&frames, step_ms);
-        // The players keep the ids the last analysis gave them, so the
-        // marks clips carry still name the same people.
-        if let Some(before) = TrackSet::load(&dir) {
-            track::keep_ids(&before.samples, &mut samples);
-        }
-        let set = TrackSet {
-            version: 1,
-            model: detectors.name(),
-            aspect: if height > 0 {
-                width as f32 / height as f32
-            } else {
-                w as f32 / h.max(1) as f32
-            },
-            samples,
-        };
-        set.save(&dir)?;
-        // Only once the new analysis is safely written: the old silhouettes
-        // were read inside the old boxes, and are read again on demand.
-        let _ = std::fs::remove_dir_all(dir.join("masks"));
-        progress(Progress::Analysing(1.0));
-        Ok(analysed)
     }
 
     /// Reads track `id`'s silhouette at every instant it is in, and writes
     /// them. Blocks; `progress` as for [`Footballs::analyse`]. Returns how
     /// many were written.
+    ///
+    /// Four instants go to the brush model at a time, laid out on one
+    /// square (see [`silhouettes`]), which is where nearly all the time
+    /// goes; the renderer moves each silhouette with its player between
+    /// the instants.
     pub fn silhouettes(
         &self,
         request: &FootballRequest,
@@ -248,23 +386,20 @@ impl Footballs {
         let cancel = job.cancel_handle();
         let dir = request.dir();
         let set = TrackSet::load(&dir).ok_or("the footage has not been analysed yet")?;
-        let instants = set.instants_of(id);
-        if instants.is_empty() {
-            return Ok(0);
-        }
-        let brush = self.brushes.brush(&cancel, progress)?;
         let mut store = concat_vision::MaskStore::open(&silhouette_dir(&dir, id));
-        let wanted: Vec<_> = instants
+        let wanted: Vec<_> = set
+            .instants_of(id)
             .into_iter()
+            .filter(|(ms, _)| ms % STEP_MS == 0)
             .filter(|(ms, _)| store.nearest_millis(*ms as f64 / 1000.0) != Some(*ms))
             .collect();
         if wanted.is_empty() {
             return Ok(0);
         }
-        let step_ms = 1000 / u64::from(MASK_RATE);
+        let brush = self.brushes.brush(&cancel, progress)?;
         let first_ms = wanted[0].0;
         let last_ms = wanted[wanted.len() - 1].0;
-        let count = ((last_ms - first_ms) / step_ms + 1) as u64;
+        let count = (last_ms - first_ms) / STEP_MS + 1;
         let (width, height) = request.media_size;
         let (w, h) = if width > READ_WIDTH && width > 0 {
             (READ_WIDTH, ((height as f64 * READ_WIDTH as f64 / width as f64).round() as u32).max(1))
@@ -274,7 +409,7 @@ impl Footballs {
         let options = DecodeOptions::default()
             .starting_at(Rational::new(first_ms as i64, 1000))
             .scaled_to(w, h)
-            .at_rate(FrameRate::new(Rational::new(i64::from(MASK_RATE), 1)))
+            .at_rate(FrameRate::new(Rational::new((1000 / STEP_MS) as i64, 1)))
             .limited_to(count);
         let mut decoder =
             Decoder::open(&request.media_path, &options).map_err(|error| error.to_string())?;
@@ -285,6 +420,28 @@ impl Footballs {
         let mut next = 0usize;
         let mut written = 0usize;
         let mut at_ms = first_ms;
+        let mut batch: Vec<(u64, concat_core::frame::Frame, [f32; 4])> = Vec::new();
+        let flush = |batch: &mut Vec<(u64, concat_core::frame::Frame, [f32; 4])>,
+                         store: &mut concat_vision::MaskStore|
+         -> Result<usize, String> {
+            if batch.is_empty() {
+                return Ok(0);
+            }
+            let shots: Vec<(&concat_core::frame::Frame, [f32; 4])> =
+                batch.iter().map(|(_, frame, bbox)| (frame, *bbox)).collect();
+            // A batch the model cannot read is left out: the marks fall
+            // back to the box there.
+            let masks = silhouettes(&brush, &shots, SILHOUETTE_WIDTH).unwrap_or_default();
+            let mut put = 0;
+            for ((ms, _, _), mask) in batch.iter().zip(masks) {
+                if let Some(mask) = mask {
+                    store.put(*ms, &mask)?;
+                    put += 1;
+                }
+            }
+            batch.clear();
+            Ok(put)
+        };
         while next < wanted.len() {
             if job.cancelled() {
                 return Err("football silhouettes cancelled".to_owned());
@@ -293,22 +450,19 @@ impl Footballs {
                 break;
             };
             if at_ms == wanted[next].0 {
-                let tracked = wanted[next].1;
-                // A silhouette the model cannot read is left out: the mark
-                // falls back to the box there.
-                if let Ok(mask) = silhouette(&brush, &frame, tracked.bbox, SILHOUETTE_WIDTH) {
-                    store.put(at_ms, &mask)?;
-                    written += 1;
-                }
+                batch.push((at_ms, frame, wanted[next].1.bbox));
                 next += 1;
-                progress(Progress::Analysing(next as f32 / wanted.len() as f32));
+                if batch.len() == 4 {
+                    written += flush(&mut batch, &mut store)?;
+                    progress(Progress::Analysing(next as f32 / wanted.len() as f32));
+                }
             }
-            at_ms += step_ms;
-            // Skip past instants the track is not in.
+            at_ms += STEP_MS;
             while next < wanted.len() && wanted[next].0 < at_ms {
                 next += 1;
             }
         }
+        written += flush(&mut batch, &mut store)?;
         progress(Progress::Analysing(1.0));
         Ok(written)
     }
