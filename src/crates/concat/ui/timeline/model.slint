@@ -290,6 +290,18 @@ export struct TagChipData {
     on: bool,
 }
 
+/// A dot on the pitch board: where, as fractions of the pitch; its colour;
+/// what it is - 0 a player, 1 a keeper, 2 a referee, 3 the ball, 4 a
+/// calibration point; the track's id; whether it is the chosen player.
+export struct PitchDotData {
+    x: float,
+    y: float,
+    colour: color,
+    kind: int,
+    id: int,
+    chosen: bool,
+}
+
 /// A register on the tagging pane's matrix: its category's row, its span.
 export struct TagBarData {
     row: int,

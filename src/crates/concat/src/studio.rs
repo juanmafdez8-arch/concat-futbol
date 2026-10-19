@@ -632,6 +632,9 @@ pub struct Models {
     pub tag_rows: Rc<VecModel<TagRowData>>,
     pub tag_filter_options: Rc<VecModel<SharedString>>,
     pub tag_bars: Rc<VecModel<TagBarData>>,
+    /// The pitch board's dots, and a calibration's points on it.
+    pub pitch_dots: Rc<VecModel<PitchDotData>>,
+    pub pitch_pairs: Rc<VecModel<PitchDotData>>,
     pub library_views: Rc<VecModel<LibraryViewData>>,
     pub menu: Rc<VecModel<MenuItemData>>,
     pub bar: Rc<VecModel<MenuItemData>>,
@@ -706,6 +709,8 @@ impl Models {
             tag_rows: Rc::new(VecModel::default()),
             tag_filter_options: Rc::new(VecModel::default()),
             tag_bars: Rc::new(VecModel::default()),
+            pitch_dots: Rc::new(VecModel::default()),
+            pitch_pairs: Rc::new(VecModel::default()),
             library_views: Rc::new(VecModel::default()),
             menu: Rc::new(VecModel::default()),
             bar: Rc::new(VecModel::default()),
@@ -1010,6 +1015,22 @@ pub struct Studio {
     football_pending: Option<(String, f32, f32, f64, model::MarkStyle)>,
     /// The dock the analysis workspace replaced, while it is showing.
     dock_before_analysis: Option<Dock>,
+    /// A pitch calibration being made: its clip, its source instant, its
+    /// pairs `[u, v, x, y]`, and a video point waiting for its landmark.
+    calibrating: Option<(String, u64, Vec<[f64; 4]>, Option<(f64, f64)>)>,
+    /// The pitch board's camera motion and calibration, keyed by the
+    /// files they were read from.
+    board_cache: RefCell<
+        Option<(
+            (
+                std::path::PathBuf,
+                Option<std::time::SystemTime>,
+                Option<std::time::SystemTime>,
+            ),
+            Arc<concat_vision::football::pitch::Motion>,
+            concat_vision::football::pitch::Calibration,
+        )>,
+    >,
 
     // ── tagging ──
     /// The register in hand: the last one made or picked, by id.
@@ -2169,6 +2190,8 @@ impl Studio {
             analysis_colour: 3,
             football_pending: None,
             dock_before_analysis: None,
+            calibrating: None,
+            board_cache: RefCell::new(None),
             tag_current: None,
             tag_filter: None,
             tag_min_rating: 0,
@@ -5262,6 +5285,9 @@ impl Studio {
     /// of everything selected that is under the playhead. Empty stage
     /// clears the selection, as an empty lane does.
     pub fn stage_pressed(&mut self, x: f32, y: f32, additive: bool) {
+        if self.calibrate_press(x, y) {
+            return;
+        }
         if self.mark_press(x, y) {
             return;
         }
@@ -6216,6 +6242,261 @@ impl Studio {
         }
     }
 
+    // ── the pitch board ──
+    //
+    // The campograma: the players and the ball as dots on a pitch, live
+    // with the playhead, in their teams' kit colours - the board every
+    // analysis tool keeps beside the picture. The picture becomes metres
+    // through a calibration: a few points clicked on the video, each then
+    // on the board, where it snaps to the landmark it is; the camera's
+    // motion, measured from the tracks, carries it along the clip.
+
+    /// The picture whose players the board shows: the one selected if it
+    /// is footage, else the first footage on the stage.
+    fn board_clip(&self) -> Option<Clip> {
+        let picked = self
+            .sole_selection()
+            .and_then(|id| self.clip(&id).cloned())
+            .filter(|clip| clip.kind == model::ClipKind::Video || clip.kind == model::ClipKind::Image);
+        picked.or_else(|| {
+            self.stage_clips()
+                .into_iter()
+                .find(|clip| clip.kind == model::ClipKind::Video)
+                .cloned()
+        })
+    }
+
+    /// The camera's motion through clip `id`'s analysis and its
+    /// calibration, read once per change of either file.
+    fn board_state(
+        &self,
+        id: &str,
+    ) -> Option<(
+        Arc<concat_vision::football::TrackSet>,
+        Arc<concat_vision::football::pitch::Motion>,
+        concat_vision::football::pitch::Calibration,
+    )> {
+        let request = self.football_request(id)?;
+        let dir = request.dir();
+        let set = concat_vision::football::shared(&dir)?;
+        let stamp = |name: &str| {
+            std::fs::metadata(dir.join(name))
+                .and_then(|meta| meta.modified())
+                .ok()
+        };
+        let key = (dir.clone(), stamp("tracks.json"), stamp("calibration.json"));
+        let mut cache = self.board_cache.borrow_mut();
+        if let Some((held, motion, calibration)) = cache.as_ref()
+            && *held == key
+        {
+            return Some((set, Arc::clone(motion), calibration.clone()));
+        }
+        let motion = Arc::new(concat_vision::football::pitch::Motion::of(&set));
+        let calibration = concat_vision::football::pitch::Calibration::load(&dir);
+        *cache = Some((key, Arc::clone(&motion), calibration.clone()));
+        Some((set, motion, calibration))
+    }
+
+    /// The board's dots at the playhead, as fractions of the pitch.
+    fn board_dots(&self) -> Vec<PitchDotData> {
+        use concat_vision::football::{Kind, pitch};
+        let Some(clip) = self.board_clip() else {
+            return Vec::new();
+        };
+        let Some((set, motion, calibration)) = self.board_state(&clip.id) else {
+            return Vec::new();
+        };
+        let seconds = self.source_at_playhead(&clip);
+        let ms = (seconds.max(0.0) * 1000.0).round() as u64;
+        let Some(map) = pitch::map_at(&calibration, &motion, ms) else {
+            return Vec::new();
+        };
+        let kit = |team: u8| {
+            let [r, g, b] = set
+                .team_colours
+                .get(usize::from(team.max(1)) - 1)
+                .copied()
+                .unwrap_or(if team == 2 { [40, 40, 40] } else { [230, 230, 230] });
+            slint::Color::from_rgb_u8(r, g, b)
+        };
+        set.at(seconds)
+            .into_iter()
+            .filter_map(|tracked| {
+                let point = if tracked.kind == Kind::Ball {
+                    concat_vision::football::centre(&tracked.bbox)
+                } else {
+                    let (x, y) = pitch::feet(&tracked.bbox);
+                    (x as f32, y as f32)
+                };
+                let (x, y) = pitch::apply(&map, (f64::from(point.0), f64::from(point.1)))?;
+                // Off the board by more than a few metres is a bad map,
+                // not a player.
+                if !(-5.0..=pitch::LENGTH + 5.0).contains(&x) || !(-5.0..=pitch::WIDTH + 5.0).contains(&y) {
+                    return None;
+                }
+                let (kind, colour) = match tracked.kind {
+                    Kind::Ball => (3, slint::Color::from_rgb_u8(255, 255, 255)),
+                    Kind::Referee => (2, slint::Color::from_rgb_u8(20, 20, 20)),
+                    Kind::Goalkeeper => (1, slint::Color::from_rgb_u8(155, 89, 182)),
+                    Kind::Player if tracked.team > 0 => (0, kit(tracked.team)),
+                    Kind::Player => (0, slint::Color::from_rgb_u8(150, 150, 150)),
+                };
+                Some(PitchDotData {
+                    x: (x / pitch::LENGTH) as f32,
+                    y: (y / pitch::WIDTH) as f32,
+                    colour,
+                    kind,
+                    id: tracked.id as i32,
+                    chosen: self.football_chosen == Some(tracked.id),
+                })
+            })
+            .collect()
+    }
+
+    /// The calibration being made, its points on the board.
+    fn board_pairs(&self) -> Vec<PitchDotData> {
+        use concat_vision::football::pitch;
+        self.calibrating
+            .as_ref()
+            .map(|(_, _, pairs, _)| {
+                pairs
+                    .iter()
+                    .map(|pair| PitchDotData {
+                        x: (pair[2] / pitch::LENGTH) as f32,
+                        y: (pair[3] / pitch::WIDTH) as f32,
+                        colour: slint::Color::from_rgb_u8(0xcb, 0xf5, 0x3f),
+                        kind: 4,
+                        id: -1,
+                        chosen: false,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Calibration started, or put away unsaved: the next stage click is a
+    /// point of the video, the next board click the landmark it shows.
+    pub fn pitch_calibrate(&mut self, on: bool) {
+        if !on {
+            self.calibrating = None;
+            if self.analysis_tool == 20 {
+                self.analysis_tool = 0;
+            }
+            return;
+        }
+        let Some(clip) = self.board_clip() else {
+            self.notify(&t("pitch.needsFootage"), true);
+            return;
+        };
+        if !self.football_analysed(&clip.id) {
+            // The board needs the players; the analysis runs, and the
+            // calibration can be made while it does.
+            self.selection = vec![clip.id.clone()];
+            if self.football_job.is_none() {
+                self.football_analyse();
+            }
+        }
+        let ms = (self.source_at_playhead(&clip).max(0.0) * 1000.0).round() as u64;
+        self.calibrating = Some((clip.id.clone(), ms, Vec::new(), None));
+        self.draw_tool = None;
+        self.football_picking = false;
+        self.analysis_tool = 20;
+        self.pause();
+    }
+
+    /// A stage press while calibrating: the video's half of the next pair.
+    fn calibrate_press(&mut self, x: f32, y: f32) -> bool {
+        let Some((id, _, _, _)) = self.calibrating.clone() else {
+            return false;
+        };
+        let Some(clip) = self.clip(&id).cloned() else {
+            return true;
+        };
+        let [u, v] = self.stage_to_source(&clip, f64::from(x), f64::from(y));
+        if let Some(state) = self.calibrating.as_mut() {
+            state.3 = Some((u, v));
+        }
+        self.request_preview();
+        true
+    }
+
+    /// A click on the board: while calibrating with a video point waiting,
+    /// its landmark - snapped to the nearest within four metres.
+    pub fn pitch_clicked(&mut self, fx: f32, fy: f32) {
+        use concat_vision::football::pitch;
+        let Some(state) = self.calibrating.as_mut() else {
+            return;
+        };
+        let Some((u, v)) = state.3.take() else {
+            self.notify(&t("pitch.videoFirst"), true);
+            return;
+        };
+        let (x, y) = (f64::from(fx) * pitch::LENGTH, f64::from(fy) * pitch::WIDTH);
+        let (x, y) = pitch::snap(x, y, 4.0).unwrap_or((x, y));
+        state.2.push([u, v, x, y]);
+    }
+
+    /// The last pair taken back.
+    pub fn pitch_calibrate_undo(&mut self) {
+        if let Some(state) = self.calibrating.as_mut() {
+            if state.3.take().is_none() {
+                state.2.pop();
+            }
+        }
+    }
+
+    /// The calibration kept: written beside the tracks, replacing one
+    /// within a second of it.
+    pub fn pitch_calibrate_done(&mut self) {
+        use concat_vision::football::pitch;
+        let Some((id, ms, pairs, _)) = self.calibrating.take() else {
+            return;
+        };
+        if self.analysis_tool == 20 {
+            self.analysis_tool = 0;
+        }
+        let from: Vec<(f64, f64)> = pairs.iter().map(|p| (p[0], p[1])).collect();
+        let to: Vec<(f64, f64)> = pairs.iter().map(|p| (p[2], p[3])).collect();
+        if pitch::homography(&from, &to).is_none() {
+            self.notify(&t("pitch.badPoints"), true);
+            return;
+        }
+        let Some(request) = self.football_request(&id) else {
+            return;
+        };
+        let dir = request.dir();
+        let mut calibration = pitch::Calibration::load(&dir);
+        calibration.anchors.retain(|anchor| anchor.ms.abs_diff(ms) > 1000);
+        calibration.anchors.push(pitch::Anchor { ms, pairs });
+        match calibration.save(&dir) {
+            Ok(()) => self.notify(&t("pitch.calibrated"), false),
+            Err(error) => self.notify(&error, true),
+        }
+    }
+
+    /// A dot clicked on the board: that player is the chosen one, as a
+    /// click on him on the monitor makes him.
+    pub fn pitch_dot_clicked(&mut self, id: i32) {
+        if let Ok(id) = u32::try_from(id) {
+            self.football_chosen = Some(id);
+            self.request_preview();
+        }
+    }
+
+    /// The board, published.
+    fn publish_board(&self, editor: &Editor<'_>, models: &Models) {
+        sync(&models.pitch_dots, self.board_dots());
+        sync(&models.pitch_pairs, self.board_pairs());
+        let calibrated = self.board_clip().is_some_and(|clip| {
+            self.board_state(&clip.id)
+                .is_some_and(|(_, _, calibration)| !calibration.anchors.is_empty())
+        });
+        editor.set_pitch_calibrated(calibrated);
+        editor.set_pitch_calibrating(self.calibrating.is_some());
+        editor.set_pitch_pairs(self.calibrating.as_ref().map_or(0, |state| state.2.len() as i32));
+        editor.set_pitch_waiting(self.calibrating.as_ref().is_some_and(|state| state.3.is_some()));
+    }
+
     // ── the analysis toolbar ──
     //
     // The monitor's own toolbar, the way Metrica Play and KlipDraw put the
@@ -6245,6 +6526,7 @@ impl Studio {
     /// out puts it away.
     pub fn analysis_tool_pick(&mut self, id: i32) {
         let id = if id == self.analysis_tool { 0 } else { id };
+        self.calibrating = None;
         self.analysis_tool = id;
         self.draw_draft = None;
         self.painting = false;
@@ -8925,6 +9207,7 @@ impl Studio {
                 ms: 0,
                 boxes: set.at(seconds),
             }],
+            team_colours: set.team_colours.clone(),
         };
         if let Err(error) = frozen.save(&to.dir()) {
             log::warn!("football: could not carry the players onto the still: {error}");
@@ -10123,6 +10406,7 @@ impl Studio {
         sync(&models.play_marks, self.montage_marks());
         self.publish_tagging(&editor, models);
         self.publish_analysis(&editor);
+        self.publish_board(&editor, models);
         editor.set_mark_in(self.mark_in.unwrap_or(-1.0));
         editor.set_mark_out(self.mark_out.unwrap_or(-1.0));
         editor.set_scroll_left(self.lanes.scroll_left);

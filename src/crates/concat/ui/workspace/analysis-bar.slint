@@ -87,6 +87,26 @@ export component AnalysisBar inherits Rectangle {
         spacing: 3px;
         alignment: start;
 
+        // Folded, the bar is this one button and the tool out; open, it
+        // is every tool, with this to fold it again.
+        HorizontalLayout {
+            spacing: 3px;
+            BarButton {
+                icon: Editor.analysis-collapsed ? "M4 6h16 M4 12h16 M4 18h16" : "M6 6l12 12 M18 6L6 18";
+                tip: Editor.analysis-collapsed ? I18n.t("bar.open") : I18n.t("bar.fold");
+                clicked => { Editor.analysis-collapsed = !Editor.analysis-collapsed; }
+            }
+            if Editor.analysis-collapsed && Editor.analysis-tool != 0: BarButton {
+                icon: "M5 3l13 6.5-5.5 1.5-2.5 5.5z";
+                tip: I18n.t("bar.pointer");
+                on: true;
+                clicked => { Editor.analysis-tool-picked(0); }
+            }
+        }
+
+        if !Editor.analysis-collapsed: VerticalLayout {
+        spacing: 3px;
+
         HorizontalLayout {
             spacing: 3px;
             BarButton {
@@ -222,6 +242,7 @@ export component AnalysisBar inherits Rectangle {
                 clicked => { Editor.analysis-clear(); }
             }
         }
+        }
     }
 }
 
@@ -235,6 +256,7 @@ export component AnalysisHint inherits Rectangle {
             + " \{Math.round(Editor.analysis-progress * 100)}%"
         : Editor.analysis-tool >= 1 && Editor.analysis-tool <= 6
             ? (Editor.analysis-ready ? I18n.t("bar.hintPlayer") : I18n.t("bar.hintFirstClick"))
+        : Editor.analysis-tool == 20 ? (Editor.pitch-waiting ? I18n.t("pitch.hintBoard") : I18n.t1("pitch.hintVideoCount", "\{Editor.pitch-pairs}"))
         : root.clicking ? I18n.t1("bar.hintPoints", "\{Editor.analysis-points}")
         : Editor.analysis-tool >= 10 ? I18n.t("bar.hintDrag")
         : "";

@@ -287,19 +287,17 @@ pub fn default_dock() -> Dock {
 /// over the inspector on the right, the timeline along the bottom - the
 /// layout Sportscode, Nacsport and Metrica open a match in.
 pub fn analysis_dock() -> Dock {
+    // The picture as large as it goes, the pitch board beside it, and a
+    // slim timeline under both; tagging and the inspector are a switch
+    // away on either seat.
     Dock::Split {
         columns: false,
-        ratio: 0.68,
+        ratio: 0.8,
         first: Box::new(Dock::Split {
             columns: true,
-            ratio: 0.66,
+            ratio: 0.68,
             first: Dock::leaf(PaneKind::Preview),
-            second: Box::new(Dock::Split {
-                columns: false,
-                ratio: 0.58,
-                first: Dock::leaf(PaneKind::Tagging),
-                second: Dock::leaf(PaneKind::Inspector),
-            }),
+            second: Dock::leaf(PaneKind::Pitch),
         }),
         second: Dock::leaf(PaneKind::Timeline),
     }

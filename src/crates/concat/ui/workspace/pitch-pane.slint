@@ -1,0 +1,224 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Jareer and Concat contributors
+
+// The campograma: a pitch, the players and the ball as dots on it in their
+// teams' kit colours, moving with the playhead - the board an analysis
+// tool keeps beside the picture. It needs a calibration: Calibrate, then a
+// recognisable point on the video, then the same point here, where it
+// snaps to the landmark; four pairs or more and Done. A dot clicked is the
+// chosen player, the one the toolbar's marks and knobs act on.
+
+import { I18n } from "../i18n.slint";
+import { Theme } from "../theme/theme.slint";
+import { Button } from "../primitives/modal.slint";
+import { PitchDotData } from "../timeline/model.slint";
+import { Editor } from "../editor.slint";
+import { Pane } from "pane.slint";
+import { PaneKind, PaneSwitcher } from "pane-switcher.slint";
+
+export component PitchPane inherits Pane {
+    in property <int> pane-seat;
+    in property <bool> pane-removable;
+    callback pane-picked(kind: PaneKind);
+    callback pane-removed();
+
+    VerticalLayout {
+        // The bar: the switcher, the name, and calibration's controls.
+        Rectangle {
+            height: 44px;
+            Rectangle {
+                y: parent.height - 1px;
+                height: 1px;
+                background: Theme.line;
+            }
+
+            HorizontalLayout {
+                padding-left: Theme.pad;
+                padding-right: Theme.pad;
+                spacing: 8px;
+
+                VerticalLayout {
+                    alignment: center;
+                    PaneSwitcher {
+                        kind: PaneKind.pitch;
+                        seat: root.pane-seat;
+                        removable: root.pane-removable;
+                        picked(kind) => { root.pane-picked(kind); }
+                        removed => { root.pane-removed(); }
+                    }
+                }
+
+                Text {
+                    text: I18n.t("pitch.title");
+                    color: Theme.fg;
+                    font-size: Theme.fs + 1px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+
+                if Editor.pitch-calibrating: VerticalLayout {
+                    alignment: center;
+                    Button {
+                        label: I18n.t("pitch.undoPoint");
+                        ghost: true;
+                        enabled: Editor.pitch-pairs > 0 || Editor.pitch-waiting;
+                        clicked => { Editor.pitch-calibrate-undo(); }
+                    }
+                }
+
+                if Editor.pitch-calibrating: VerticalLayout {
+                    alignment: center;
+                    Button {
+                        label: I18n.t("pitch.cancel");
+                        ghost: true;
+                        clicked => { Editor.pitch-calibrate(false); }
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    Button {
+                        label: Editor.pitch-calibrating
+                            ? I18n.t1("pitch.done", "\{Editor.pitch-pairs}")
+                            : Editor.pitch-calibrated ? I18n.t("pitch.recalibrate") : I18n.t("pitch.calibrate");
+                        primary: Editor.pitch-calibrating || !Editor.pitch-calibrated;
+                        enabled: !Editor.pitch-calibrating || Editor.pitch-pairs >= 4;
+                        clicked => {
+                            if (Editor.pitch-calibrating) {
+                                Editor.pitch-calibrate-done();
+                            } else {
+                                Editor.pitch-calibrate(true);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // The board, as large as the pane allows at the pitch's shape.
+        Rectangle {
+            property <float> ratio: 105 / 68;
+            property <length> margin: 12px;
+            property <length> fit-w: Math.min(self.width - 2 * self.margin, (self.height - 2 * self.margin) * self.ratio);
+            property <length> fit-h: self.fit-w / self.ratio;
+
+            board := Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: parent.fit-w;
+                height: parent.fit-h;
+                border-radius: 4px;
+                clip: true;
+                background: #2f6b3a;
+
+                // Mowing stripes.
+                for stripe in 10: Rectangle {
+                    x: stripe * parent.width / 10;
+                    y: 0;
+                    width: parent.width / 10;
+                    height: parent.height;
+                    background: Math.mod(stripe, 2) == 0 ? #34753f : #2f6b3a;
+                }
+
+                // The markings, in metres: the boundary, halfway, the circle,
+                // the boxes, the six-yard boxes, the arcs, the spots.
+                Path {
+                    width: parent.width;
+                    height: parent.height;
+                    viewbox-width: 105;
+                    viewbox-height: 68;
+                    stroke: #ffffffb3;
+                    stroke-width: 1.5px;
+                    commands: "M0.4 0.4 H104.6 V67.6 H0.4 Z M52.5 0.4 V67.6 M52.5 24.85 A9.15 9.15 0 1 1 52.5 43.15 A9.15 9.15 0 1 1 52.5 24.85 M0.4 13.84 H16.5 V54.16 H0.4 M0.4 24.84 H5.5 V43.16 H0.4 M104.6 13.84 H88.5 V54.16 H104.6 M104.6 24.84 H99.5 V43.16 H104.6 M16.5 26.69 A9.15 9.15 0 0 1 16.5 41.31 M88.5 26.69 A9.15 9.15 0 0 0 88.5 41.31";
+                }
+
+                for spot in [{ x: 11 / 105, y: 0.5 }, { x: 52.5 / 105, y: 0.5 }, { x: 94 / 105, y: 0.5 }]: Rectangle {
+                    x: spot.x * parent.width - 2px;
+                    y: spot.y * parent.height - 2px;
+                    width: 4px;
+                    height: 4px;
+                    border-radius: 2px;
+                    background: #ffffffb3;
+                }
+
+                // A click on the board: a calibration's landmark.
+                if Editor.pitch-calibrating: TouchArea {
+                    mouse-cursor: Editor.pitch-waiting ? MouseCursor.crosshair : MouseCursor.default;
+                    clicked => {
+                        Editor.pitch-clicked(self.mouse-x / self.width, self.mouse-y / self.height);
+                    }
+                }
+
+                // The calibration's points so far.
+                for pair in Editor.pitch-pairs-shown: Rectangle {
+                    x: pair.x * parent.width - 7px;
+                    y: pair.y * parent.height - 7px;
+                    width: 14px;
+                    height: 14px;
+                    border-radius: 7px;
+                    border-width: 2px;
+                    border-color: pair.colour;
+                }
+
+                // The players and the ball.
+                for dot in Editor.pitch-dots: Rectangle {
+                    property <length> size: dot.kind == 3 ? 8px : 13px;
+                    x: dot.x * parent.width - self.size / 2;
+                    y: dot.y * parent.height - self.size / 2;
+                    width: self.size;
+                    height: self.size;
+                    border-radius: self.size / 2;
+                    background: dot.colour;
+                    border-width: dot.chosen ? 2px : 1px;
+                    border-color: dot.chosen ? Theme.accent : (dot.kind == 3 ? #000000aa : #ffffffcc);
+                    drop-shadow-blur: 3px;
+                    drop-shadow-color: #00000080;
+
+                    if dot.chosen: Rectangle {
+                        width: parent.width + 10px;
+                        height: parent.height + 10px;
+                        border-radius: self.width / 2;
+                        border-width: 2px;
+                        border-color: Theme.accent;
+                    }
+
+                    if !Editor.pitch-calibrating && dot.kind != 3: TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { Editor.pitch-dot-clicked(dot.id); }
+                    }
+                }
+
+                // What to do, while there is nothing to show.
+                if !Editor.pitch-calibrating && !Editor.pitch-calibrated: Rectangle {
+                    background: #00000080;
+                    Text {
+                        width: parent.width - 40px;
+                        text: I18n.t("pitch.empty");
+                        color: #f2f2f2;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                if Editor.pitch-calibrating: Rectangle {
+                    x: 8px;
+                    y: 8px;
+                    width: hint.preferred-width + 20px;
+                    height: 24px;
+                    border-radius: 12px;
+                    background: #141414e6;
+                    hint := Text {
+                        text: Editor.pitch-waiting ? I18n.t("pitch.hintBoard") : I18n.t("pitch.hintVideo");
+                        color: #f2f2f2;
+                        font-size: 11px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+}

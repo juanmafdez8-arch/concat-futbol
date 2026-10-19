@@ -119,6 +119,7 @@ pub fn link(frames: &[(u64, Vec<Detection>)], step_ms: u64) -> Vec<Sample> {
                 kind: detection.kind,
                 bbox: detection.bbox,
                 score: detection.score,
+                team: 0,
             });
         }
         for (t, track) in live.iter_mut().enumerate() {
@@ -156,6 +157,7 @@ pub fn link(frames: &[(u64, Vec<Detection>)], step_ms: u64) -> Vec<Sample> {
                 kind: detection.kind,
                 bbox: detection.bbox,
                 score: detection.score,
+                team: 0,
             });
         }
 
@@ -189,6 +191,7 @@ pub fn link(frames: &[(u64, Vec<Detection>)], step_ms: u64) -> Vec<Sample> {
                     kind: Kind::Ball,
                     bbox: detection.bbox,
                     score: detection.score,
+                    team: 0,
                 });
             }
             None => {

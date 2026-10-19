@@ -43,6 +43,8 @@ export enum PaneKind {
     meters,
     /// the tagging window: category buttons, descriptors, the registers
     tagging,
+    /// the pitch board: the players as dots on a pitch, live
+    pitch,
 }
 
 export global Panes {
@@ -66,6 +68,7 @@ export global Panes {
             : kind == PaneKind.keyframes ? I18n.t("common.keyframes")
             : kind == PaneKind.meters ? I18n.t("meters.meters")
             : kind == PaneKind.tagging ? I18n.t("tag.title")
+            : kind == PaneKind.pitch ? I18n.t("pitch.title")
             : I18n.t("paneSwitcher.timeline");
     }
 
@@ -79,6 +82,7 @@ export global Panes {
             : kind == PaneKind.keyframes ? "keyframes"
             : kind == PaneKind.meters ? "meters"
             : kind == PaneKind.tagging ? "tagging"
+            : kind == PaneKind.pitch ? "pitch"
             : "timeline";
     }
 
@@ -93,6 +97,7 @@ export global Panes {
             : kind == PaneKind.keyframes ? Glyph.keyframe
             : kind == PaneKind.meters ? Glyph.meter
             : kind == PaneKind.tagging ? Glyph.tag
+            : kind == PaneKind.pitch ? Glyph.frame
             : Glyph.rows;
     }
 }
@@ -415,6 +420,11 @@ export component PaneSwitcher inherits Rectangle {
                         chosen => { menu.close(); root.picked(PaneKind.tagging); }
                     }
                     SwitchRow {
+                        kind: PaneKind.pitch;
+                        current: root.kind == PaneKind.pitch;
+                        chosen => { menu.close(); root.picked(PaneKind.pitch); }
+                    }
+                    SwitchRow {
                         kind: PaneKind.timeline;
                         current: root.kind == PaneKind.timeline;
                         chosen => { menu.close(); root.picked(PaneKind.timeline); }
@@ -524,6 +534,10 @@ export component AddPaneButton inherits Rectangle {
                     SwitchRow {
                         kind: PaneKind.tagging;
                         chosen => { menu.close(); root.added(PaneKind.tagging); }
+                    }
+                    SwitchRow {
+                        kind: PaneKind.pitch;
+                        chosen => { menu.close(); root.added(PaneKind.pitch); }
                     }
                     SwitchRow {
                         kind: PaneKind.timeline;

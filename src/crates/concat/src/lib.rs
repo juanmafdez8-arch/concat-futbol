@@ -274,6 +274,8 @@ pub fn run() -> Result<(), slint::PlatformError> {
         editor.set_tag_rows(ModelRc::from(models.tag_rows.clone()));
         editor.set_tag_filter_options(ModelRc::from(models.tag_filter_options.clone()));
         editor.set_tag_bars(ModelRc::from(models.tag_bars.clone()));
+        editor.set_pitch_dots(ModelRc::from(models.pitch_dots.clone()));
+        editor.set_pitch_pairs_shown(ModelRc::from(models.pitch_pairs.clone()));
         app.global::<Library>()
             .set_views(ModelRc::from(models.library_views.clone()));
         editor.set_menu_items(ModelRc::from(models.menu.clone()));
@@ -1313,6 +1315,21 @@ pub fn run() -> Result<(), slint::PlatformError> {
     }));
     editor.on_analysis_workspace_toggled(on_window!(|state| {
         state.toggle_analysis_workspace();
+    }));
+    editor.on_pitch_calibrate(on_window!(|state, on: bool| {
+        state.pitch_calibrate(on);
+    }));
+    editor.on_pitch_calibrate_done(on_window!(|state| {
+        state.pitch_calibrate_done();
+    }));
+    editor.on_pitch_calibrate_undo(on_window!(|state| {
+        state.pitch_calibrate_undo();
+    }));
+    editor.on_pitch_clicked(on_window!(|state, x: f32, y: f32| {
+        state.pitch_clicked(x, y);
+    }));
+    editor.on_pitch_dot_clicked(on_window!(|state, id: i32| {
+        state.pitch_dot_clicked(id);
     }));
     editor.on_clip_enhance_set(on_window!(|state, on: bool| {
         state.clip_enhance_set(on);

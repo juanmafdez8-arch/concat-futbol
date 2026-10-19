@@ -27,7 +27,7 @@ use concat_core::time::{FrameRate, Rational};
 use concat_media::{DecodeOptions, Decoder, FrameSource};
 use concat_project::model::Project;
 use concat_vision::football::detect::{Detectors, silhouettes};
-use concat_vision::football::{TrackSet, football_dir, silhouette_dir, track, tracks_file};
+use concat_vision::football::{TrackSet, football_dir, pitch, silhouette_dir, track, tracks_file};
 
 use crate::brush::Brushes;
 use crate::cutout::Progress;
@@ -48,6 +48,43 @@ const STEP_MS: u64 = 200;
 /// and after it, in seconds.
 const WINDOW_BEFORE: f64 = 4.0;
 const WINDOW_AFTER: f64 = 16.0;
+
+/// One analysed instant's detections.
+type Detections = (u64, Vec<concat_vision::football::Detection>);
+/// One analysed instant's shirts: each outfield player's box and colour.
+type Shirts = (u64, Vec<([f32; 4], [u8; 3])>);
+/// A stretch's detections and shirts.
+type Spans = (Vec<Detections>, Vec<Shirts>);
+
+/// The players of `samples` told apart into two teams by their shirts,
+/// each box labelled; the two kits' colours, or none when there were too
+/// few players to tell.
+fn label_teams(samples: &mut [concat_vision::football::Sample], shirts: &[Shirts]) -> Vec<[u8; 3]> {
+    let by_ms: std::collections::HashMap<u64, &Vec<([f32; 4], [u8; 3])>> =
+        shirts.iter().map(|(ms, seen)| (*ms, seen)).collect();
+    let mut colours: std::collections::HashMap<u32, Vec<[u8; 3]>> = std::collections::HashMap::new();
+    for sample in samples.iter() {
+        let Some(seen) = by_ms.get(&sample.ms) else {
+            continue;
+        };
+        for tracked in sample.boxes.iter().filter(|t| pitch::in_teams(t.kind) && t.score > 0.0) {
+            // The tracker keeps a matched detection's box as it was.
+            if let Some((_, colour)) = seen.iter().find(|(bbox, _)| *bbox == tracked.bbox) {
+                colours.entry(tracked.id).or_default().push(*colour);
+            }
+        }
+    }
+    let (teams, kits) = pitch::teams(&colours);
+    if teams.is_empty() {
+        return Vec::new();
+    }
+    for sample in samples.iter_mut() {
+        for tracked in &mut sample.boxes {
+            tracked.team = teams.get(&tracked.id).copied().unwrap_or(0);
+        }
+    }
+    kits.to_vec()
+}
 
 /// What one analysis covers.
 #[derive(Clone, Debug)]
@@ -208,12 +245,13 @@ impl Footballs {
         } else {
             w as f32 / h.max(1) as f32
         };
-        let save = |samples: Vec<concat_vision::football::Sample>| {
+        let save = |samples: Vec<concat_vision::football::Sample>, team_colours: Vec<[u8; 3]>| {
             TrackSet {
                 version: 1,
                 model: detectors.name(),
                 aspect,
                 samples,
+                team_colours,
             }
             .save(&dir)
         };
@@ -231,10 +269,11 @@ impl Footballs {
         let total = to - from;
         let mut done = 0.0;
         let mut frames: Vec<(u64, Vec<concat_vision::football::Detection>)> = Vec::new();
+        let mut shirts: Vec<Shirts> = Vec::new();
         let mut first_ids: Option<Vec<concat_vision::football::Sample>> = None;
         if let Some((window_from, window_to)) = window {
             let span = window_to - window_from;
-            frames = self.detect_span(&job, &detectors, request, (w, h), window_from, window_to, &mut |f| {
+            (frames, shirts) = self.detect_span(&job, &detectors, request, (w, h), window_from, window_to, &mut |f| {
                 progress(Progress::Analysing((0.9 * f as f64 * span / total) as f32));
             })?;
             done += span;
@@ -242,7 +281,8 @@ impl Footballs {
             if let Some(before) = &before {
                 track::keep_ids(&before.samples, &mut samples);
             }
-            save(samples.clone())?;
+            let kits = label_teams(&mut samples, &shirts);
+            save(samples.clone(), kits)?;
             first_ids = Some(samples);
             on_window();
         }
@@ -258,11 +298,12 @@ impl Footballs {
         for (span_from, span_to) in rest {
             let span = span_to - span_from;
             let base = done;
-            let mut found = self.detect_span(&job, &detectors, request, (w, h), span_from, span_to, &mut |f| {
+            let (mut found, mut seen) = self.detect_span(&job, &detectors, request, (w, h), span_from, span_to, &mut |f| {
                 progress(Progress::Analysing((0.9 * (base + f as f64 * span) / total) as f32));
             })?;
             done += span;
             frames.append(&mut found);
+            shirts.append(&mut seen);
         }
         frames.sort_by_key(|(ms, _)| *ms);
         frames.dedup_by_key(|(ms, _)| *ms);
@@ -273,7 +314,8 @@ impl Footballs {
         if let Some(earlier) = first_ids.as_ref().or(before.as_ref().map(|set| &set.samples)) {
             track::keep_ids(earlier, &mut samples);
         }
-        save(samples)?;
+        let kits = label_teams(&mut samples, &shirts);
+        save(samples, kits)?;
         // Only once the new analysis is safely written: the old silhouettes
         // were read inside the old boxes, and are read again on demand.
         if before.is_some() {
@@ -295,11 +337,11 @@ impl Footballs {
         from: f64,
         to: f64,
         progress: &mut dyn FnMut(f32),
-    ) -> Result<Vec<(u64, Vec<concat_vision::football::Detection>)>, String> {
+    ) -> Result<Spans, String> {
         let first_ms = ((from.max(0.0) * 1000.0) as u64).div_ceil(STEP_MS) * STEP_MS;
         let last_ms = (to.max(0.0) * 1000.0) as u64;
         if last_ms < first_ms {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Vec::new()));
         }
         let count = ((last_ms - first_ms) / STEP_MS + 1) as usize;
         let options = DecodeOptions::default()
@@ -310,6 +352,7 @@ impl Footballs {
         let path = request.media_path.clone();
         let (sender, receiver) = std::sync::mpsc::sync_channel::<Result<concat_core::frame::Frame, String>>(4);
         let mut out = Vec::with_capacity(count);
+        let mut shirts = Vec::with_capacity(count);
         let mut failure: Option<String> = None;
         std::thread::scope(|scope| {
             scope.spawn(move || {
@@ -350,7 +393,21 @@ impl Footballs {
                     Err(_) => break,
                 };
                 match detectors.detect(&frame) {
-                    Ok(found) => out.push((first_ms + index as u64 * STEP_MS, found)),
+                    Ok(found) => {
+                        let ms = first_ms + index as u64 * STEP_MS;
+                        // The shirts while the frame is here: what the
+                        // teams are told apart by after the linking.
+                        let seen: Vec<([f32; 4], [u8; 3])> = found
+                            .iter()
+                            .filter(|detection| pitch::in_teams(detection.kind))
+                            .filter_map(|detection| {
+                                pitch::shirt_colour(&frame, &detection.bbox)
+                                    .map(|colour| (detection.bbox, colour))
+                            })
+                            .collect();
+                        shirts.push((ms, seen));
+                        out.push((ms, found));
+                    }
                     Err(error) => {
                         failure = Some(error);
                         break;
@@ -364,7 +421,7 @@ impl Footballs {
         });
         match failure {
             Some(error) => Err(error),
-            None => Ok(out),
+            None => Ok((out, shirts)),
         }
     }
 

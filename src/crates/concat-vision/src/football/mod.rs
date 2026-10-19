@@ -25,6 +25,7 @@
 pub mod detect;
 pub mod draw;
 pub mod marks;
+pub mod pitch;
 pub mod track;
 
 use std::collections::HashMap;
@@ -85,6 +86,14 @@ pub struct TrackedBox {
     /// The detector's score, or zero for a box filled in across a gap.
     #[serde(rename = "s")]
     pub score: f32,
+    /// Which team the shirt says, 1 or 2; 0 for a keeper, a referee, the
+    /// ball, or a player seen too briefly to tell.
+    #[serde(rename = "t", default, skip_serializing_if = "is_zero")]
+    pub team: u8,
+}
+
+fn is_zero(team: &u8) -> bool {
+    *team == 0
 }
 
 impl TrackedBox {
@@ -117,6 +126,10 @@ pub struct TrackSet {
     pub aspect: f32,
     /// The analysed instants, ascending.
     pub samples: Vec<Sample>,
+    /// The two teams' shirt colours, as the analysis found them; empty
+    /// when it could not tell.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub team_colours: Vec<[u8; 3]>,
 }
 
 fn one() -> f32 {
@@ -357,6 +370,7 @@ mod tests {
             version: 1,
             model: String::new(),
             aspect: 16.0 / 9.0,
+            team_colours: Vec::new(),
             samples: vec![
                 Sample {
                     ms: 0,
@@ -365,6 +379,7 @@ mod tests {
                         kind: Kind::Player,
                         bbox: [0.1, 0.1, 0.2, 0.3],
                         score: 0.9,
+                        team: 0,
                     }],
                 },
                 Sample {
@@ -374,6 +389,7 @@ mod tests {
                         kind: Kind::Player,
                         bbox: [0.2, 0.1, 0.3, 0.3],
                         score: 0.9,
+                        team: 0,
                     }],
                 },
             ],

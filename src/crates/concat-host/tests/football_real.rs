@@ -74,6 +74,13 @@ fn football_on_real_footage() {
         "analysed {analysed} instants in {:.1}s: {people} people tracks, {per_frame:.1} boxes/instant, ball in {ball_frames}",
         started.elapsed().as_secs_f32()
     );
+    let mut per_team = [0usize; 3];
+    for sample in &set.samples {
+        for tracked in &sample.boxes {
+            per_team[usize::from(tracked.team.min(2))] += 1;
+        }
+    }
+    println!("teams: kits {:?}, boxes per team (none, 1, 2) {per_team:?}", set.team_colours);
     let lengths: Vec<usize> = tracks.iter().take(12).map(|t| t.2).collect();
     println!("longest tracks (instants): {lengths:?}");
     assert!(people > 0, "nobody found");
