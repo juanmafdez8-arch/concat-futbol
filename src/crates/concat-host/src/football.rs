@@ -51,8 +51,10 @@ const WINDOW_AFTER: f64 = 16.0;
 
 /// One analysed instant's detections.
 type Detections = (u64, Vec<concat_vision::football::Detection>);
-/// One analysed instant's shirts: each outfield player's box and colour.
-type Shirts = (u64, Vec<([f32; 4], [u8; 3])>);
+/// Each outfield player's box and shirt colour at one instant.
+type Seen = Vec<([f32; 4], [u8; 3])>;
+/// One analysed instant's shirts.
+type Shirts = (u64, Seen);
 /// A stretch's detections and shirts.
 type Spans = (Vec<Detections>, Vec<Shirts>);
 
@@ -60,7 +62,7 @@ type Spans = (Vec<Detections>, Vec<Shirts>);
 /// each box labelled; the two kits' colours, or none when there were too
 /// few players to tell.
 fn label_teams(samples: &mut [concat_vision::football::Sample], shirts: &[Shirts]) -> Vec<[u8; 3]> {
-    let by_ms: std::collections::HashMap<u64, &Vec<([f32; 4], [u8; 3])>> =
+    let by_ms: std::collections::HashMap<u64, &Seen> =
         shirts.iter().map(|(ms, seen)| (*ms, seen)).collect();
     let mut colours: std::collections::HashMap<u32, Vec<[u8; 3]>> = std::collections::HashMap::new();
     for sample in samples.iter() {
@@ -458,7 +460,7 @@ impl Footballs {
         let last_ms = wanted[wanted.len() - 1].0;
         let count = (last_ms - first_ms) / STEP_MS + 1;
         let (width, height) = request.media_size;
-        let (w, h) = if width > READ_WIDTH && width > 0 {
+        let (w, h) = if width > READ_WIDTH {
             (READ_WIDTH, ((height as f64 * READ_WIDTH as f64 / width as f64).round() as u32).max(1))
         } else {
             (width.max(1), height.max(1))

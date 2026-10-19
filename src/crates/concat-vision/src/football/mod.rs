@@ -302,9 +302,10 @@ pub fn silhouettes(dir: &Path, id: u32) -> MaskStore {
 
 /// Analyses read once per process and shared, keyed by folder and the
 /// file's modification time so a fresh analysis is picked up.
-fn cache() -> &'static Mutex<HashMap<PathBuf, (std::time::SystemTime, Arc<TrackSet>)>> {
-    static CACHE: OnceLock<Mutex<HashMap<PathBuf, (std::time::SystemTime, Arc<TrackSet>)>>> =
-        OnceLock::new();
+type Shared = Mutex<HashMap<PathBuf, (std::time::SystemTime, Arc<TrackSet>)>>;
+
+fn cache() -> &'static Shared {
+    static CACHE: OnceLock<Shared> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 

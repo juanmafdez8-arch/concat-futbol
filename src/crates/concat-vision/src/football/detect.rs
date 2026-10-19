@@ -367,6 +367,10 @@ pub fn silhouette(
     Ok(out)
 }
 
+/// Where a shot's crop came from and went: its source pixel corner, the
+/// scale it was drawn at, and its tile's corner on the canvas.
+type Placement = (u32, u32, f32, u32, u32);
+
 /// Silhouettes for up to four shots at a time - a frame and the box of the
 /// thing in it - read by the brush model in one pass: the crops round the
 /// boxes are laid out two by two on one 1024 square, the encoder - the
@@ -386,7 +390,7 @@ pub fn silhouettes(
         let mut canvas = Frame::black(CANVAS, CANVAS);
         // Where each shot's crop came from and where it went: the source
         // pixel box, the scale, and the tile's corner on the canvas.
-        let mut placed: Vec<Option<(u32, u32, f32, u32, u32)>> = Vec::new();
+        let mut placed: Vec<Option<Placement>> = Vec::new();
         for (index, (frame, bbox)) in group.iter().enumerate() {
             let (fw, fh) = (frame.width() as f32, frame.height() as f32);
             let [l, t, r, b] = *bbox;

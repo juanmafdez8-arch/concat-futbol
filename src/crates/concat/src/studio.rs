@@ -6185,8 +6185,10 @@ impl Studio {
         if let Some(still) = self.clip(&id).cloned() {
             self.seek(still.start as f32);
         }
-        if self.draw_tool.is_none() {
-            self.draw_tool = Some(1);
+        // The arrow out, whatever tool was: a player tool left out would
+        // take the presses meant for the drawings.
+        if !(10..=14).contains(&self.analysis_tool) {
+            self.analysis_tool_pick(11);
         }
         self.painting = false;
         self.football_picking = false;
@@ -6325,10 +6327,6 @@ impl Studio {
     }
 
     /// The board's dots at the playhead, as fractions of the pitch.
-    fn board_dots(&self) -> Vec<PitchDotData> {
-        self.board_layers().0
-    }
-
     /// The board's dots and its team lines at the playhead: each player
     /// with his number in his team, the ink that reads on his kit and the
     /// last three seconds of his run; and for each team its back line and
@@ -6471,18 +6469,11 @@ impl Studio {
     }
 
     /// The board's legend: each team's kit colour.
-    fn board_kits(&self) -> Vec<slint::Color> {
-        let Some(clip) = self.board_clip() else {
-            return Vec::new();
-        };
-        self.board_state(&clip.id)
-            .map(|(set, _, _, _)| {
-                set.team_colours
-                    .iter()
-                    .map(|[r, g, b]| slint::Color::from_rgb_u8(*r, *g, *b))
-                    .collect()
-            })
-            .unwrap_or_default()
+    fn board_kits(set: &concat_vision::football::TrackSet) -> Vec<slint::Color> {
+        set.team_colours
+            .iter()
+            .map(|[r, g, b]| slint::Color::from_rgb_u8(*r, *g, *b))
+            .collect()
     }
 
     /// The calibration being made, its points on the board.
@@ -6623,12 +6614,16 @@ impl Studio {
         let (dots, lines) = self.board_layers();
         sync(&models.pitch_dots, dots);
         sync(&models.pitch_lines, lines);
-        sync(&models.pitch_kits, self.board_kits());
         sync(&models.pitch_pairs, self.board_pairs());
-        let calibrated = self.board_clip().is_some_and(|clip| {
-            self.board_state(&clip.id)
-                .is_some_and(|(_, _, calibration, _)| !calibration.anchors.is_empty())
-        });
+        // The legend and the badge from the cache the layers just filled.
+        let state = self.board_clip().and_then(|clip| self.board_state(&clip.id));
+        sync(
+            &models.pitch_kits,
+            state.as_ref().map(|(set, _, _, _)| Self::board_kits(set)).unwrap_or_default(),
+        );
+        let calibrated = state
+            .as_ref()
+            .is_some_and(|(_, _, calibration, _)| !calibration.anchors.is_empty());
         editor.set_pitch_calibrated(calibrated);
         editor.set_pitch_calibrating(self.calibrating.is_some());
         editor.set_pitch_pairs(self.calibrating.as_ref().map_or(0, |state| state.2.len() as i32));
@@ -8018,8 +8013,14 @@ impl Studio {
                         studio.request_preview();
                         studio.ensure_football_silhouettes();
                     }
-                    Err(error) if error.contains("cancelled") => {}
-                    Err(error) => studio.notify(&tf("football.failed", &[&error]), true),
+                    Err(error) => {
+                        // The press kept for it would land on whatever is
+                        // analysed next, somewhere else.
+                        studio.football_pending = None;
+                        if !error.contains("cancelled") {
+                            studio.notify(&tf("football.failed", &[&error]), true);
+                        }
+                    }
                 }
             },
         );
@@ -9349,6 +9350,28 @@ impl Studio {
         };
         if let Err(error) = frozen.save(&to.dir()) {
             log::warn!("football: could not carry the players onto the still: {error}");
+            return;
+        }
+        // And the pitch's calibration at that instant, so the board works
+        // on the still: four points of the picture and where the source's
+        // map put them.
+        use concat_vision::football::pitch;
+        let calibration = pitch::Calibration::load(&from.dir());
+        let motion = pitch::Motion::of(&set);
+        let ms = (seconds.max(0.0) * 1000.0).round() as u64;
+        if let Some(map) = pitch::map_at(&calibration, &motion, ms) {
+            let pairs: Vec<[f64; 4]> = [(0.25, 0.4), (0.75, 0.4), (0.8, 0.85), (0.2, 0.85)]
+                .into_iter()
+                .filter_map(|(u, v)| pitch::apply(&map, (u, v)).map(|(x, y)| [u, v, x, y]))
+                .collect();
+            if pairs.len() == 4 {
+                let carried = pitch::Calibration {
+                    anchors: vec![pitch::Anchor { ms: 0, pairs }],
+                };
+                if let Err(error) = carried.save(&to.dir()) {
+                    log::warn!("football: could not carry the calibration onto the still: {error}");
+                }
+            }
         }
     }
 

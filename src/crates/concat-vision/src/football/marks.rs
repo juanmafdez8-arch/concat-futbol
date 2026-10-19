@@ -242,8 +242,8 @@ pub fn spotlight(
             .fold(0.0, f32::max);
         let gain = dim + (1.0 - dim) * lit;
         if gain < 0.999 {
-            for c in 0..3 {
-                pixel[c] = (f32::from(pixel[c]) * gain + 0.5) as u8;
+            for channel in pixel.iter_mut().take(3) {
+                *channel = (f32::from(*channel) * gain + 0.5) as u8;
             }
         }
     });

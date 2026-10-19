@@ -160,7 +160,9 @@ fn invert(m: &Matrix) -> Option<Matrix> {
     Some(c.map(|value| value / det))
 }
 
-/// Gaussian elimination with partial pivoting on an 8 × 8 system.
+/// Gaussian elimination with partial pivoting on an 8 × 8 system. Indexed
+/// as the textbook writes it: rows and columns are the algorithm.
+#[allow(clippy::needless_range_loop)]
 fn solve8(mut a: [[f64; 8]; 8], mut b: [f64; 8]) -> Option<[f64; 8]> {
     for col in 0..8 {
         let pivot = (col..8).max_by(|&i, &j| a[i][col].abs().total_cmp(&a[j][col].abs()))?;

@@ -206,7 +206,7 @@ impl FootballJob {
             .map(|mark| {
                 let tracked = boxes.iter().find(|tracked| tracked.id == mark.track).copied();
                 let silhouette = tracked.and_then(|tracked| {
-                    self.silhouette(&set, mark.track, seconds, tracked.centre())
+                    self.silhouette(set, mark.track, seconds, tracked.centre())
                 });
                 (mark, tracked, silhouette)
             })
