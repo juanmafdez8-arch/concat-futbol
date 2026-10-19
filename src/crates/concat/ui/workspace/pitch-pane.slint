@@ -210,18 +210,25 @@ export component PitchPane inherits Pane {
                 font-size: 11px;
                 vertical-alignment: center;
             }
-            Field {
-                horizontal-stretch: 0;
-                width: 56px;
-                technical: true;
-                value: Editor.pitch-chosen-number;
-                placeholder: I18n.t("pitch.playerNumber");
-                edited(text) => { Editor.pitch-player-number(Editor.pitch-chosen-id, text); }
-            }
+            // The wide field first and the fixed one last, in a box of its
+            // own: a Field given a width straight in the row takes the
+            // presses meant for the field beside it.
             Field {
                 value: Editor.pitch-chosen-name;
                 placeholder: I18n.t("pitch.playerName");
                 edited(text) => { Editor.pitch-player-name(Editor.pitch-chosen-id, text); }
+            }
+            Rectangle {
+                width: 64px;
+                min-height: 28px;
+                max-height: 28px;
+                clip: true;
+                Field {
+                    technical: true;
+                    value: Editor.pitch-chosen-number;
+                    placeholder: I18n.t("pitch.playerNumber");
+                    edited(text) => { Editor.pitch-player-number(Editor.pitch-chosen-id, text); }
+                }
             }
         }
 
