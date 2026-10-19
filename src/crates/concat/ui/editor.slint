@@ -426,6 +426,12 @@ export global Editor {
     callback pitch-calibrate-undo();
     callback pitch-clicked(x: float, y: float);
     callback pitch-dot-clicked(id: int);
+    /// The chosen player's card on the board: -1 for none.
+    in-out property <int> pitch-chosen-id: -1;
+    in-out property <string> pitch-chosen-number;
+    in-out property <string> pitch-chosen-name;
+    callback pitch-player-number(id: int, text: string);
+    callback pitch-player-name(id: int, text: string);
     in-out property <float> frame-rate;
     in-out property <float> scroll-left;
     in-out property <float> seconds-per-pixel;

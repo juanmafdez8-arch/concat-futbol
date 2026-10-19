@@ -1333,6 +1333,12 @@ pub fn run() -> Result<(), slint::PlatformError> {
     editor.on_pitch_dot_clicked(on_window!(|state, id: i32| {
         state.pitch_dot_clicked(id);
     }));
+    editor.on_pitch_player_number(on_window!(|state, id: i32, text: SharedString| {
+        state.pitch_player_number(id, &text);
+    }));
+    editor.on_pitch_player_name(on_window!(|state, id: i32, text: SharedString| {
+        state.pitch_player_name(id, &text);
+    }));
     editor.on_clip_enhance_set(on_window!(|state, on: bool| {
         state.clip_enhance_set(on);
     }));

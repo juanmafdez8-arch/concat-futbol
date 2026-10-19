@@ -1030,10 +1030,11 @@ pub struct Studio {
                 std::path::PathBuf,
                 Option<std::time::SystemTime>,
                 Option<std::time::SystemTime>,
+                Option<std::time::SystemTime>,
             ),
             Arc<concat_vision::football::pitch::Motion>,
             concat_vision::football::pitch::Calibration,
-            Arc<HashMap<u32, i32>>,
+            Arc<HashMap<u32, (i32, String)>>,
         )>,
     >,
 
@@ -6282,7 +6283,7 @@ impl Studio {
         Arc<concat_vision::football::TrackSet>,
         Arc<concat_vision::football::pitch::Motion>,
         concat_vision::football::pitch::Calibration,
-        Arc<HashMap<u32, i32>>,
+        Arc<HashMap<u32, (i32, String)>>,
     )> {
         let request = self.football_request(id)?;
         let dir = request.dir();
@@ -6292,7 +6293,12 @@ impl Studio {
                 .and_then(|meta| meta.modified())
                 .ok()
         };
-        let key = (dir.clone(), stamp("tracks.json"), stamp("calibration.json"));
+        let key = (
+            dir.clone(),
+            stamp("tracks.json"),
+            stamp("calibration.json"),
+            stamp("roster.json"),
+        );
         let mut cache = self.board_cache.borrow_mut();
         if let Some((held, motion, calibration, numbers)) = cache.as_ref()
             && *held == key
@@ -6309,7 +6315,7 @@ impl Studio {
                 teams.insert(tracked.id, tracked.team);
             }
         }
-        let mut numbers: HashMap<u32, i32> = HashMap::new();
+        let mut numbers: HashMap<u32, (i32, String)> = HashMap::new();
         for team in [1u8, 2] {
             let mut ids: Vec<u32> = teams
                 .iter()
@@ -6318,8 +6324,16 @@ impl Studio {
                 .collect();
             ids.sort_unstable();
             for (index, id) in ids.into_iter().enumerate() {
-                numbers.insert(id, index as i32 + 1);
+                numbers.insert(id, (index as i32 + 1, String::new()));
             }
+        }
+        // Over them, the real numbers and names the analyst gave.
+        for (id, player) in concat_vision::football::Roster::load(&dir).players {
+            let entry = numbers.entry(id).or_insert((0, String::new()));
+            if let Some(number) = player.number {
+                entry.0 = number as i32;
+            }
+            entry.1 = player.name.trim().to_string();
         }
         let numbers = Arc::new(numbers);
         *cache = Some((key, Arc::clone(&motion), calibration.clone(), Arc::clone(&numbers)));
@@ -6425,7 +6439,11 @@ impl Studio {
                 },
                 kind,
                 id: tracked.id as i32,
-                number: numbers.get(&tracked.id).copied().unwrap_or(0),
+                number: numbers.get(&tracked.id).map_or(0, |held| held.0),
+                name: numbers
+                    .get(&tracked.id)
+                    .map(|held| SharedString::from(held.1.as_str()))
+                    .unwrap_or_default(),
                 chosen: self.football_chosen == Some(tracked.id),
                 trail: if tracked.kind == Kind::Ball { SharedString::new() } else { trail(tracked.id).into() },
             });
@@ -6494,6 +6512,7 @@ impl Studio {
                         number: 0,
                         chosen: false,
                         trail: SharedString::new(),
+                        name: SharedString::new(),
                     })
                     .collect()
             })
@@ -6609,6 +6628,37 @@ impl Studio {
         }
     }
 
+    /// The chosen player's real number typed on the board: digits only,
+    /// none to go back to the board's own count.
+    pub fn pitch_player_number(&mut self, id: i32, text: &str) {
+        let digits: String = text.chars().filter(char::is_ascii_digit).take(3).collect();
+        let number = digits.parse::<u32>().ok();
+        self.edit_roster(id, |player| player.number = number);
+    }
+
+    /// The chosen player's name typed on the board.
+    pub fn pitch_player_name(&mut self, id: i32, text: &str) {
+        let name: String = text.chars().take(40).collect();
+        self.edit_roster(id, |player| player.name = name);
+    }
+
+    /// Player `id` of the board's footage renamed, and the board redrawn.
+    fn edit_roster(&mut self, id: i32, change: impl FnOnce(&mut concat_vision::football::Player)) {
+        let Ok(id) = u32::try_from(id) else {
+            return;
+        };
+        let Some(request) = self.board_clip().and_then(|clip| self.football_request(&clip.id)) else {
+            return;
+        };
+        let dir = request.dir();
+        let mut roster = concat_vision::football::Roster::load(&dir);
+        roster.edit(id, change);
+        if let Err(error) = roster.save(&dir) {
+            self.notify(&error, true);
+        }
+        self.request_preview();
+    }
+
     /// The board, published.
     fn publish_board(&self, editor: &Editor<'_>, models: &Models) {
         let (dots, lines) = self.board_layers();
@@ -6624,6 +6674,22 @@ impl Studio {
         let calibrated = state
             .as_ref()
             .is_some_and(|(_, _, calibration, _)| !calibration.anchors.is_empty());
+        // The chosen player's card: his number and name, to be edited.
+        let chosen = self.football_chosen.and_then(|id| {
+            let (_, _, _, numbers) = state.as_ref()?;
+            let (number, name) = numbers.get(&id).cloned().unwrap_or_default();
+            Some((id, number, name))
+        });
+        editor.set_pitch_chosen_id(chosen.as_ref().map_or(-1, |(id, _, _)| *id as i32));
+        editor.set_pitch_chosen_number(
+            chosen
+                .as_ref()
+                .filter(|(_, number, _)| *number > 0)
+                .map(|(_, number, _)| number.to_string())
+                .unwrap_or_default()
+                .into(),
+        );
+        editor.set_pitch_chosen_name(chosen.map(|(_, _, name)| name).unwrap_or_default().into());
         editor.set_pitch_calibrated(calibrated);
         editor.set_pitch_calibrating(self.calibrating.is_some());
         editor.set_pitch_pairs(self.calibrating.as_ref().map_or(0, |state| state.2.len() as i32));
@@ -9351,6 +9417,12 @@ impl Studio {
         if let Err(error) = frozen.save(&to.dir()) {
             log::warn!("football: could not carry the players onto the still: {error}");
             return;
+        }
+        let roster = concat_vision::football::Roster::load(&from.dir());
+        if !roster.players.is_empty()
+            && let Err(error) = roster.save(&to.dir())
+        {
+            log::warn!("football: could not carry the names onto the still: {error}");
         }
         // And the pitch's calibration at that instant, so the board works
         // on the still: four points of the picture and where the source's

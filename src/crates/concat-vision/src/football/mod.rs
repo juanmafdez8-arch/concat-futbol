@@ -362,6 +362,55 @@ pub fn lerp_box(a: &[f32; 4], b: &[f32; 4], t: f32) -> [f32; 4] {
     std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t)
 }
 
+/// The names the analyst gave the players: by track id, his real shirt
+/// number and his name. Kept beside the tracks as `roster.json`; a new
+/// analysis keeps the ids it can, so the names stay on the players.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Roster {
+    /// The players named, by track id.
+    #[serde(default)]
+    pub players: std::collections::BTreeMap<u32, Player>,
+}
+
+/// One player's shirt number and name, either of them unset.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Player {
+    /// His real shirt number.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number: Option<u32>,
+    /// His name, as the analyst wrote it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+}
+
+impl Roster {
+    /// Reads `roster.json` from a media's football folder; empty when
+    /// there is none.
+    pub fn load(dir: &Path) -> Roster {
+        std::fs::read(dir.join("roster.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
+    }
+
+    /// Writes it beside the tracks.
+    pub fn save(&self, dir: &Path) -> Result<(), String> {
+        std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
+        let bytes = serde_json::to_vec_pretty(self).map_err(|error| error.to_string())?;
+        std::fs::write(dir.join("roster.json"), bytes).map_err(|error| error.to_string())
+    }
+
+    /// Player `id`'s entry changed by `change`; one left with neither a
+    /// number nor a name is dropped.
+    pub fn edit(&mut self, id: u32, change: impl FnOnce(&mut Player)) {
+        let player = self.players.entry(id).or_default();
+        change(player);
+        if player.number.is_none() && player.name.trim().is_empty() {
+            self.players.remove(&id);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -419,6 +468,28 @@ mod tests {
     #[test]
     fn nothing_is_known_far_from_the_analysis() {
         assert!(set().at(5.0).is_empty());
+    }
+
+    #[test]
+    fn a_roster_keeps_numbers_and_names() {
+        let dir = std::env::temp_dir().join(format!("concat-roster-{}", std::process::id()));
+        let mut roster = Roster::default();
+        roster.edit(7, |p| p.number = Some(10));
+        roster.edit(7, |p| p.name = "Pedri".into());
+        roster.edit(9, |p| p.name = "  ".into());
+        assert_eq!(roster.players.len(), 1, "an empty entry is dropped");
+        roster.save(&dir).expect("saved");
+        let back = Roster::load(&dir);
+        assert_eq!(back, roster);
+        assert_eq!(back.players[&7].number, Some(10));
+        let mut cleared = back;
+        cleared.edit(7, |p| {
+            p.number = None;
+            p.name.clear();
+        });
+        assert!(cleared.players.is_empty());
+        assert!(Roster::load(&dir.join("missing")).players.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

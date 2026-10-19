@@ -11,9 +11,12 @@
 // The board needs a calibration: Calibrate, then a recognisable point on
 // the video, then the same point here, where it snaps to the landmark;
 // four pairs or more and Done.
+//
+// A chosen player gets a card under the switches: his real number and his
+// name, typed in, kept with the footage and shown on the board.
 
 import { I18n } from "../i18n.slint";
-import { Button } from "../primitives/modal.slint";
+import { Button, Field } from "../primitives/modal.slint";
 import { Tip } from "../primitives/tooltip.slint";
 import { PitchDotData, PitchLineData } from "../timeline/model.slint";
 import { Editor } from "../editor.slint";
@@ -195,6 +198,33 @@ export component PitchPane inherits Pane {
             }
         }
 
+        // The chosen player's card: his number and name.
+        if Editor.pitch-chosen-id >= 0 && !Editor.pitch-calibrating: HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-top: 8px;
+            spacing: 6px;
+            Text {
+                text: I18n.t("pitch.player");
+                color: Night.muted;
+                font-size: 11px;
+                vertical-alignment: center;
+            }
+            Field {
+                horizontal-stretch: 0;
+                width: 56px;
+                technical: true;
+                value: Editor.pitch-chosen-number;
+                placeholder: I18n.t("pitch.playerNumber");
+                edited(text) => { Editor.pitch-player-number(Editor.pitch-chosen-id, text); }
+            }
+            Field {
+                value: Editor.pitch-chosen-name;
+                placeholder: I18n.t("pitch.playerName");
+                edited(text) => { Editor.pitch-player-name(Editor.pitch-chosen-id, text); }
+            }
+        }
+
         // The board, as large as the pane allows at the pitch's shape.
         Rectangle {
             vertical-stretch: 1;
@@ -321,6 +351,18 @@ export component PitchPane inherits Pane {
                         font-weight: 700;
                         horizontal-alignment: center;
                         vertical-alignment: center;
+                    }
+
+                    if Editor.pitch-show-numbers && dot.name != "": Text {
+                        x: (parent.width - 90px) / 2;
+                        y: parent.height + 2px;
+                        width: 90px;
+                        text: dot.name;
+                        color: dot.chosen ? Night.accent : Night.text;
+                        font-size: 9px;
+                        font-weight: 600;
+                        horizontal-alignment: center;
+                        overflow: elide;
                     }
 
                     if !Editor.pitch-calibrating && dot.kind != 3: TouchArea {
