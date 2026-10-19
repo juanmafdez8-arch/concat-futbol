@@ -635,6 +635,8 @@ pub struct Models {
     /// The pitch board's dots, and a calibration's points on it.
     pub pitch_dots: Rc<VecModel<PitchDotData>>,
     pub pitch_pairs: Rc<VecModel<PitchDotData>>,
+    pub pitch_lines: Rc<VecModel<PitchLineData>>,
+    pub pitch_kits: Rc<VecModel<slint::Color>>,
     pub library_views: Rc<VecModel<LibraryViewData>>,
     pub menu: Rc<VecModel<MenuItemData>>,
     pub bar: Rc<VecModel<MenuItemData>>,
@@ -711,6 +713,8 @@ impl Models {
             tag_bars: Rc::new(VecModel::default()),
             pitch_dots: Rc::new(VecModel::default()),
             pitch_pairs: Rc::new(VecModel::default()),
+            pitch_lines: Rc::new(VecModel::default()),
+            pitch_kits: Rc::new(VecModel::default()),
             library_views: Rc::new(VecModel::default()),
             menu: Rc::new(VecModel::default()),
             bar: Rc::new(VecModel::default()),
@@ -1029,6 +1033,7 @@ pub struct Studio {
             ),
             Arc<concat_vision::football::pitch::Motion>,
             concat_vision::football::pitch::Calibration,
+            Arc<HashMap<u32, i32>>,
         )>,
     >,
 
@@ -6275,6 +6280,7 @@ impl Studio {
         Arc<concat_vision::football::TrackSet>,
         Arc<concat_vision::football::pitch::Motion>,
         concat_vision::football::pitch::Calibration,
+        Arc<HashMap<u32, i32>>,
     )> {
         let request = self.football_request(id)?;
         let dir = request.dir();
@@ -6286,71 +6292,197 @@ impl Studio {
         };
         let key = (dir.clone(), stamp("tracks.json"), stamp("calibration.json"));
         let mut cache = self.board_cache.borrow_mut();
-        if let Some((held, motion, calibration)) = cache.as_ref()
+        if let Some((held, motion, calibration, numbers)) = cache.as_ref()
             && *held == key
         {
-            return Some((set, Arc::clone(motion), calibration.clone()));
+            return Some((set, Arc::clone(motion), calibration.clone(), Arc::clone(numbers)));
         }
         let motion = Arc::new(concat_vision::football::pitch::Motion::of(&set));
         let calibration = concat_vision::football::pitch::Calibration::load(&dir);
-        *cache = Some((key, Arc::clone(&motion), calibration.clone()));
-        Some((set, motion, calibration))
+        // Each team's numbers: its players by id, 1 upward, so a number
+        // holds for as long as the analysis does. One pass over the match.
+        let mut teams: HashMap<u32, u8> = HashMap::new();
+        for tracked in set.samples.iter().flat_map(|sample| sample.boxes.iter()) {
+            if tracked.kind == concat_vision::football::Kind::Player && tracked.team > 0 {
+                teams.insert(tracked.id, tracked.team);
+            }
+        }
+        let mut numbers: HashMap<u32, i32> = HashMap::new();
+        for team in [1u8, 2] {
+            let mut ids: Vec<u32> = teams
+                .iter()
+                .filter(|(_, held)| **held == team)
+                .map(|(id, _)| *id)
+                .collect();
+            ids.sort_unstable();
+            for (index, id) in ids.into_iter().enumerate() {
+                numbers.insert(id, index as i32 + 1);
+            }
+        }
+        let numbers = Arc::new(numbers);
+        *cache = Some((key, Arc::clone(&motion), calibration.clone(), Arc::clone(&numbers)));
+        Some((set, motion, calibration, numbers))
     }
 
     /// The board's dots at the playhead, as fractions of the pitch.
     fn board_dots(&self) -> Vec<PitchDotData> {
+        self.board_layers().0
+    }
+
+    /// The board's dots and its team lines at the playhead: each player
+    /// with his number in his team, the ink that reads on his kit and the
+    /// last three seconds of his run; and for each team its back line and
+    /// its midfield line, which a coach reads the block's height and width
+    /// from.
+    fn board_layers(&self) -> (Vec<PitchDotData>, Vec<PitchLineData>) {
         use concat_vision::football::{Kind, pitch};
+        let Some(clip) = self.board_clip() else {
+            return (Vec::new(), Vec::new());
+        };
+        let Some((set, motion, calibration, numbers)) = self.board_state(&clip.id) else {
+            return (Vec::new(), Vec::new());
+        };
+        let seconds = self.source_at_playhead(&clip);
+        let to_ms = |seconds: f64| (seconds.max(0.0) * 1000.0).round() as u64;
+        let Some(map) = pitch::map_at(&calibration, &motion, to_ms(seconds)) else {
+            return (Vec::new(), Vec::new());
+        };
+        let kit_of = |team: u8| -> [u8; 3] {
+            set.team_colours
+                .get(usize::from(team.max(1)) - 1)
+                .copied()
+                .unwrap_or(if team == 2 { [91, 141, 239] } else { [242, 201, 76] })
+        };
+        // The trail's instants, each with its map, worked out once for
+        // every player.
+        let trail_maps: Vec<(f64, concat_vision::football::pitch::Matrix)> = (0..=7)
+            .rev()
+            .map(|step| seconds - f64::from(step) * 0.4)
+            .filter(|at| *at >= 0.0)
+            .filter_map(|at| pitch::map_at(&calibration, &motion, to_ms(at)).map(|map| (at, map)))
+            .collect();
+        let place = |map: &concat_vision::football::pitch::Matrix,
+                     tracked: &concat_vision::football::TrackedBox|
+         -> Option<(f64, f64)> {
+            let point = if tracked.kind == Kind::Ball {
+                let (x, y) = concat_vision::football::centre(&tracked.bbox);
+                (f64::from(x), f64::from(y))
+            } else {
+                pitch::feet(&tracked.bbox)
+            };
+            let (x, y) = pitch::apply(map, point)?;
+            ((-5.0..=pitch::LENGTH + 5.0).contains(&x) && (-5.0..=pitch::WIDTH + 5.0).contains(&y))
+                .then_some((x, y))
+        };
+        let to_board = |(x, y): (f64, f64)| ((x / pitch::LENGTH) as f32, (y / pitch::WIDTH) as f32);
+        // The run behind each player: where he was each 0.4 s of the last
+        // three, on the board, as path commands over a 1000 square.
+        let trail = |id: u32| -> String {
+            let mut points = Vec::new();
+            for (at, map) in &trail_maps {
+                if let Some(tracked) = set.track_at(id, *at)
+                    && let Some(point) = place(map, &tracked)
+                {
+                    let (bx, by) = to_board(point);
+                    points.push((bx * 1000.0, by * 1000.0));
+                }
+            }
+            if points.len() < 2 {
+                return String::new();
+            }
+            let mut path = format!("M {:.1} {:.1}", points[0].0, points[0].1);
+            for (x, y) in &points[1..] {
+                path.push_str(&format!(" L {x:.1} {y:.1}"));
+            }
+            path
+        };
+        let mut dots = Vec::new();
+        // Each team's outfield players on the board, for its lines.
+        let mut outfield: HashMap<u8, Vec<(f64, f64)>> = HashMap::new();
+        for tracked in set.at(seconds) {
+            let Some(point) = place(&map, &tracked) else {
+                continue;
+            };
+            let (x, y) = to_board(point);
+            let (kind, colour) = match tracked.kind {
+                Kind::Ball => (3, [255, 255, 255]),
+                Kind::Referee => (2, [52, 58, 64]),
+                Kind::Goalkeeper => (1, [155, 89, 182]),
+                Kind::Player if tracked.team > 0 => (0, kit_of(tracked.team)),
+                Kind::Player => (0, [139, 148, 158]),
+            };
+            if tracked.kind == Kind::Player && tracked.team > 0 {
+                outfield.entry(tracked.team).or_default().push(point);
+            }
+            let [r, g, b] = colour;
+            let light = 0.3 * f32::from(r) + 0.59 * f32::from(g) + 0.11 * f32::from(b) > 150.0;
+            dots.push(PitchDotData {
+                x,
+                y,
+                colour: slint::Color::from_rgb_u8(r, g, b),
+                ink: if light {
+                    slint::Color::from_rgb_u8(14, 17, 22)
+                } else {
+                    slint::Color::from_rgb_u8(255, 255, 255)
+                },
+                kind,
+                id: tracked.id as i32,
+                number: numbers.get(&tracked.id).copied().unwrap_or(0),
+                chosen: self.football_chosen == Some(tracked.id),
+                trail: if tracked.kind == Kind::Ball { SharedString::new() } else { trail(tracked.id).into() },
+            });
+        }
+        // The lines: a team defends the goal its players stand nearer; its
+        // four deepest outfield players are the back line, the next four
+        // the midfield, each drawn across the pitch.
+        let mut lines = Vec::new();
+        for (team, players) in &outfield {
+            if players.len() < 6 {
+                continue;
+            }
+            let mean_x = players.iter().map(|p| p.0).sum::<f64>() / players.len() as f64;
+            let own_goal = if mean_x < pitch::LENGTH / 2.0 { 0.0 } else { pitch::LENGTH };
+            let mut by_depth = players.clone();
+            by_depth.sort_by(|a, b| (a.0 - own_goal).abs().total_cmp(&(b.0 - own_goal).abs()));
+            let [r, g, b] = kit_of(*team);
+            for line in [&by_depth[..4], &by_depth[4..by_depth.len().min(8)]] {
+                if line.len() < 3 {
+                    continue;
+                }
+                let mut line = line.to_vec();
+                line.sort_by(|a, b| a.1.total_cmp(&b.1));
+                let mut path = String::new();
+                for (index, point) in line.iter().enumerate() {
+                    let (bx, by) = to_board(*point);
+                    path.push_str(&format!(
+                        "{} {:.1} {:.1} ",
+                        if index == 0 { "M" } else { "L" },
+                        bx * 1000.0,
+                        by * 1000.0
+                    ));
+                }
+                lines.push(PitchLineData {
+                    commands: path.trim_end().into(),
+                    colour: slint::Color::from_rgb_u8(r, g, b),
+                });
+            }
+        }
+        (dots, lines)
+    }
+
+    /// The board's legend: each team's kit colour.
+    fn board_kits(&self) -> Vec<slint::Color> {
         let Some(clip) = self.board_clip() else {
             return Vec::new();
         };
-        let Some((set, motion, calibration)) = self.board_state(&clip.id) else {
-            return Vec::new();
-        };
-        let seconds = self.source_at_playhead(&clip);
-        let ms = (seconds.max(0.0) * 1000.0).round() as u64;
-        let Some(map) = pitch::map_at(&calibration, &motion, ms) else {
-            return Vec::new();
-        };
-        let kit = |team: u8| {
-            let [r, g, b] = set
-                .team_colours
-                .get(usize::from(team.max(1)) - 1)
-                .copied()
-                .unwrap_or(if team == 2 { [40, 40, 40] } else { [230, 230, 230] });
-            slint::Color::from_rgb_u8(r, g, b)
-        };
-        set.at(seconds)
-            .into_iter()
-            .filter_map(|tracked| {
-                let point = if tracked.kind == Kind::Ball {
-                    concat_vision::football::centre(&tracked.bbox)
-                } else {
-                    let (x, y) = pitch::feet(&tracked.bbox);
-                    (x as f32, y as f32)
-                };
-                let (x, y) = pitch::apply(&map, (f64::from(point.0), f64::from(point.1)))?;
-                // Off the board by more than a few metres is a bad map,
-                // not a player.
-                if !(-5.0..=pitch::LENGTH + 5.0).contains(&x) || !(-5.0..=pitch::WIDTH + 5.0).contains(&y) {
-                    return None;
-                }
-                let (kind, colour) = match tracked.kind {
-                    Kind::Ball => (3, slint::Color::from_rgb_u8(255, 255, 255)),
-                    Kind::Referee => (2, slint::Color::from_rgb_u8(20, 20, 20)),
-                    Kind::Goalkeeper => (1, slint::Color::from_rgb_u8(155, 89, 182)),
-                    Kind::Player if tracked.team > 0 => (0, kit(tracked.team)),
-                    Kind::Player => (0, slint::Color::from_rgb_u8(150, 150, 150)),
-                };
-                Some(PitchDotData {
-                    x: (x / pitch::LENGTH) as f32,
-                    y: (y / pitch::WIDTH) as f32,
-                    colour,
-                    kind,
-                    id: tracked.id as i32,
-                    chosen: self.football_chosen == Some(tracked.id),
-                })
+        self.board_state(&clip.id)
+            .map(|(set, _, _, _)| {
+                set.team_colours
+                    .iter()
+                    .map(|[r, g, b]| slint::Color::from_rgb_u8(*r, *g, *b))
+                    .collect()
             })
-            .collect()
+            .unwrap_or_default()
     }
 
     /// The calibration being made, its points on the board.
@@ -6364,10 +6496,13 @@ impl Studio {
                     .map(|pair| PitchDotData {
                         x: (pair[2] / pitch::LENGTH) as f32,
                         y: (pair[3] / pitch::WIDTH) as f32,
-                        colour: slint::Color::from_rgb_u8(0xcb, 0xf5, 0x3f),
+                        colour: slint::Color::from_rgb_u8(0x2d, 0xd4, 0xbf),
+                        ink: slint::Color::from_rgb_u8(0x0e, 0x11, 0x16),
                         kind: 4,
                         id: -1,
+                        number: 0,
                         chosen: false,
+                        trail: SharedString::new(),
                     })
                     .collect()
             })
@@ -6485,11 +6620,14 @@ impl Studio {
 
     /// The board, published.
     fn publish_board(&self, editor: &Editor<'_>, models: &Models) {
-        sync(&models.pitch_dots, self.board_dots());
+        let (dots, lines) = self.board_layers();
+        sync(&models.pitch_dots, dots);
+        sync(&models.pitch_lines, lines);
+        sync(&models.pitch_kits, self.board_kits());
         sync(&models.pitch_pairs, self.board_pairs());
         let calibrated = self.board_clip().is_some_and(|clip| {
             self.board_state(&clip.id)
-                .is_some_and(|(_, _, calibration)| !calibration.anchors.is_empty())
+                .is_some_and(|(_, _, calibration, _)| !calibration.anchors.is_empty())
         });
         editor.set_pitch_calibrated(calibrated);
         editor.set_pitch_calibrating(self.calibrating.is_some());

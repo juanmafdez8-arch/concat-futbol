@@ -1,20 +1,71 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Jareer and Concat contributors
 
-// The campograma: a pitch, the players and the ball as dots on it in their
-// teams' kit colours, moving with the playhead - the board an analysis
-// tool keeps beside the picture. It needs a calibration: Calibrate, then a
-// recognisable point on the video, then the same point here, where it
-// snaps to the landmark; four pairs or more and Done. A dot clicked is the
-// chosen player, the one the toolbar's marks and knobs act on.
+// The campograma, in the "stadium at night" direction: a graphite panel,
+// a muted pitch the dots stand out on, and one teal accent for what is
+// active - the chosen player, the switches that are on. Each player is a
+// circle in his kit with his number; behind him the last three seconds of
+// his run; across each team its back and midfield lines. The three layers
+// switch on and off from the bar. A dot clicked is the chosen player.
+//
+// The board needs a calibration: Calibrate, then a recognisable point on
+// the video, then the same point here, where it snaps to the landmark;
+// four pairs or more and Done.
 
 import { I18n } from "../i18n.slint";
-import { Theme } from "../theme/theme.slint";
 import { Button } from "../primitives/modal.slint";
-import { PitchDotData } from "../timeline/model.slint";
+import { Tip } from "../primitives/tooltip.slint";
+import { PitchDotData, PitchLineData } from "../timeline/model.slint";
 import { Editor } from "../editor.slint";
 import { Pane } from "pane.slint";
 import { PaneKind, PaneSwitcher } from "pane-switcher.slint";
+
+/// The direction's colours.
+global Night {
+    out property <color> panel: #161b22;
+    out property <color> ground: #0e1116;
+    out property <color> line: #2a313c;
+    out property <color> text: #e6edf3;
+    out property <color> muted: #8b949e;
+    out property <color> accent: #2dd4bf;
+    out property <color> pitch: #1d3a2c;
+    out property <color> stripe: #21422f;
+    out property <color> marks: #ffffff80;
+}
+
+// A layer's switch: a small pill, teal when on.
+component LayerSwitch inherits Rectangle {
+    in property <string> label;
+    in property <string> tip;
+    in-out property <bool> on;
+
+    height: 22px;
+    width: text.preferred-width + 18px;
+    border-radius: 11px;
+    background: root.on ? Night.accent.with-alpha(0.16) : touch.has-hover ? #ffffff12 : transparent;
+    border-width: 1px;
+    border-color: root.on ? Night.accent.with-alpha(0.6) : Night.line;
+
+    text := Text {
+        text: root.label;
+        color: root.on ? Night.accent : Night.muted;
+        font-size: 11px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.on = !root.on; }
+    }
+
+    Tip {
+        width: parent.width;
+        height: parent.height;
+        text: root.tip;
+        active: touch.has-hover;
+    }
+}
 
 export component PitchPane inherits Pane {
     in property <int> pane-seat;
@@ -22,19 +73,21 @@ export component PitchPane inherits Pane {
     callback pane-picked(kind: PaneKind);
     callback pane-removed();
 
+    background: Night.panel;
+
     VerticalLayout {
-        // The bar: the switcher, the name, and calibration's controls.
+        // The bar: the switcher, the name, the state, and calibration.
         Rectangle {
             height: 44px;
             Rectangle {
                 y: parent.height - 1px;
                 height: 1px;
-                background: Theme.line;
+                background: Night.line;
             }
 
             HorizontalLayout {
-                padding-left: Theme.pad;
-                padding-right: Theme.pad;
+                padding-left: 12px;
+                padding-right: 12px;
                 spacing: 8px;
 
                 VerticalLayout {
@@ -50,10 +103,31 @@ export component PitchPane inherits Pane {
 
                 Text {
                     text: I18n.t("pitch.title");
-                    color: Theme.fg;
-                    font-size: Theme.fs + 1px;
+                    color: Night.text;
+                    font-size: 13px;
                     font-weight: 600;
                     vertical-alignment: center;
+                }
+
+                if Editor.pitch-calibrated && !Editor.pitch-calibrating: VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        height: 18px;
+                        width: state.preferred-width + 14px;
+                        border-radius: 9px;
+                        border-width: 1px;
+                        border-color: Night.line;
+                        state := Text {
+                            text: I18n.t("pitch.calibratedBadge");
+                            color: Night.muted;
+                            font-size: 10px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                Rectangle {
                     horizontal-stretch: 1;
                 }
 
@@ -83,6 +157,7 @@ export component PitchPane inherits Pane {
                             ? I18n.t1("pitch.done", "\{Editor.pitch-pairs}")
                             : Editor.pitch-calibrated ? I18n.t("pitch.recalibrate") : I18n.t("pitch.calibrate");
                         primary: Editor.pitch-calibrating || !Editor.pitch-calibrated;
+                        ghost: Editor.pitch-calibrated && !Editor.pitch-calibrating;
                         enabled: !Editor.pitch-calibrating || Editor.pitch-pairs >= 4;
                         clicked => {
                             if (Editor.pitch-calibrating) {
@@ -96,8 +171,33 @@ export component PitchPane inherits Pane {
             }
         }
 
+        // The layers' switches.
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-top: 8px;
+            spacing: 6px;
+            alignment: start;
+            LayerSwitch {
+                label: I18n.t("pitch.trails");
+                tip: I18n.t("pitch.trailsTip");
+                on <=> Editor.pitch-show-trails;
+            }
+            LayerSwitch {
+                label: I18n.t("pitch.lines");
+                tip: I18n.t("pitch.linesTip");
+                on <=> Editor.pitch-show-lines;
+            }
+            LayerSwitch {
+                label: I18n.t("pitch.numbers");
+                tip: I18n.t("pitch.numbersTip");
+                on <=> Editor.pitch-show-numbers;
+            }
+        }
+
         // The board, as large as the pane allows at the pitch's shape.
         Rectangle {
+            vertical-stretch: 1;
             property <float> ratio: 105 / 68;
             property <length> margin: 12px;
             property <length> fit-w: Math.min(self.width - 2 * self.margin, (self.height - 2 * self.margin) * self.ratio);
@@ -108,41 +208,71 @@ export component PitchPane inherits Pane {
                 y: (parent.height - self.height) / 2;
                 width: parent.fit-w;
                 height: parent.fit-h;
-                border-radius: 4px;
+                border-radius: 6px;
                 clip: true;
-                background: #2f6b3a;
+                background: Night.pitch;
 
-                // Mowing stripes.
                 for stripe in 10: Rectangle {
                     x: stripe * parent.width / 10;
                     y: 0;
                     width: parent.width / 10;
                     height: parent.height;
-                    background: Math.mod(stripe, 2) == 0 ? #34753f : #2f6b3a;
+                    background: Math.mod(stripe, 2) == 0 ? Night.stripe : Night.pitch;
                 }
 
-                // The markings, in metres: the boundary, halfway, the circle,
-                // the boxes, the six-yard boxes, the arcs, the spots.
                 Path {
                     width: parent.width;
                     height: parent.height;
                     viewbox-width: 105;
                     viewbox-height: 68;
-                    stroke: #ffffffb3;
-                    stroke-width: 1.5px;
+                    stroke: Night.marks;
+                    stroke-width: 1.2px;
                     commands: "M0.4 0.4 H104.6 V67.6 H0.4 Z M52.5 0.4 V67.6 M52.5 24.85 A9.15 9.15 0 1 1 52.5 43.15 A9.15 9.15 0 1 1 52.5 24.85 M0.4 13.84 H16.5 V54.16 H0.4 M0.4 24.84 H5.5 V43.16 H0.4 M104.6 13.84 H88.5 V54.16 H104.6 M104.6 24.84 H99.5 V43.16 H104.6 M16.5 26.69 A9.15 9.15 0 0 1 16.5 41.31 M88.5 26.69 A9.15 9.15 0 0 0 88.5 41.31";
                 }
 
-                for spot in [{ x: 11 / 105, y: 0.5 }, { x: 52.5 / 105, y: 0.5 }, { x: 94 / 105, y: 0.5 }]: Rectangle {
+                for spot in [{ x: 11 / 105 }, { x: 52.5 / 105 }, { x: 94 / 105 }]: Rectangle {
                     x: spot.x * parent.width - 2px;
-                    y: spot.y * parent.height - 2px;
+                    y: parent.height / 2 - 2px;
                     width: 4px;
                     height: 4px;
                     border-radius: 2px;
-                    background: #ffffffb3;
+                    background: Night.marks;
                 }
 
-                // A click on the board: a calibration's landmark.
+                // The team lines, under everything that moves.
+                if Editor.pitch-show-lines: Rectangle {
+                    for line in Editor.pitch-lines: Path {
+                        x: 0;
+                        y: 0;
+                        width: board.width;
+                        height: board.height;
+                        viewbox-width: 1000;
+                        viewbox-height: 1000;
+                        commands: line.commands;
+                        stroke: line.colour.with-alpha(0.55);
+                        stroke-width: 1.5px;
+                        stroke-line-join: round;
+                    }
+                }
+
+                // The runs, under the dots.
+                if Editor.pitch-show-trails: Rectangle {
+                    for dot in Editor.pitch-dots: Path {
+                        x: 0;
+                        y: 0;
+                        width: board.width;
+                        height: board.height;
+                        viewbox-width: 1000;
+                        viewbox-height: 1000;
+                        commands: dot.trail;
+                        visible: dot.trail != "";
+                        stroke: dot.colour.with-alpha(0.4);
+                        stroke-width: 2.5px;
+                        stroke-line-cap: round;
+                        stroke-line-join: round;
+                    }
+                }
+
                 if Editor.pitch-calibrating: TouchArea {
                     mouse-cursor: Editor.pitch-waiting ? MouseCursor.crosshair : MouseCursor.default;
                     clicked => {
@@ -150,7 +280,6 @@ export component PitchPane inherits Pane {
                     }
                 }
 
-                // The calibration's points so far.
                 for pair in Editor.pitch-pairs-shown: Rectangle {
                     x: pair.x * parent.width - 7px;
                     y: pair.y * parent.height - 7px;
@@ -158,29 +287,40 @@ export component PitchPane inherits Pane {
                     height: 14px;
                     border-radius: 7px;
                     border-width: 2px;
-                    border-color: pair.colour;
+                    border-color: Night.accent;
                 }
 
-                // The players and the ball.
+                // The players and the ball: a circle in the kit with the
+                // number in the ink that reads on it; the chosen one ringed.
                 for dot in Editor.pitch-dots: Rectangle {
-                    property <length> size: dot.kind == 3 ? 8px : 13px;
+                    property <length> size: dot.kind == 3 ? 8px : 19px;
                     x: dot.x * parent.width - self.size / 2;
                     y: dot.y * parent.height - self.size / 2;
                     width: self.size;
                     height: self.size;
-                    border-radius: self.size / 2;
-                    background: dot.colour;
-                    border-width: dot.chosen ? 2px : 1px;
-                    border-color: dot.chosen ? Theme.accent : (dot.kind == 3 ? #000000aa : #ffffffcc);
-                    drop-shadow-blur: 3px;
-                    drop-shadow-color: #00000080;
 
                     if dot.chosen: Rectangle {
                         width: parent.width + 10px;
                         height: parent.height + 10px;
                         border-radius: self.width / 2;
                         border-width: 2px;
-                        border-color: Theme.accent;
+                        border-color: Night.accent;
+                    }
+
+                    Rectangle {
+                        border-radius: parent.width / 2;
+                        background: dot.colour;
+                        border-width: 1.5px;
+                        border-color: dot.kind == 3 ? #0e1116 : Night.ground;
+                    }
+
+                    if Editor.pitch-show-numbers && dot.number > 0: Text {
+                        text: dot.number;
+                        color: dot.ink;
+                        font-size: 9.5px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
                     }
 
                     if !Editor.pitch-calibrating && dot.kind != 3: TouchArea {
@@ -189,13 +329,12 @@ export component PitchPane inherits Pane {
                     }
                 }
 
-                // What to do, while there is nothing to show.
                 if !Editor.pitch-calibrating && !Editor.pitch-calibrated: Rectangle {
-                    background: #00000080;
+                    background: #0e1116b3;
                     Text {
                         width: parent.width - 40px;
                         text: I18n.t("pitch.empty");
-                        color: #f2f2f2;
+                        color: Night.text;
                         font-size: 12px;
                         wrap: word-wrap;
                         horizontal-alignment: center;
@@ -209,14 +348,45 @@ export component PitchPane inherits Pane {
                     width: hint.preferred-width + 20px;
                     height: 24px;
                     border-radius: 12px;
-                    background: #141414e6;
+                    background: #0e1116e6;
+                    border-width: 1px;
+                    border-color: Night.line;
                     hint := Text {
                         text: Editor.pitch-waiting ? I18n.t("pitch.hintBoard") : I18n.t("pitch.hintVideo");
-                        color: #f2f2f2;
+                        color: Night.text;
                         font-size: 11px;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
+                }
+            }
+        }
+
+        // The legend: each team's kit.
+        if Editor.pitch-kits.length >= 2: HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-bottom: 10px;
+            spacing: 14px;
+            alignment: start;
+            for kit[index] in Editor.pitch-kits: HorizontalLayout {
+                spacing: 6px;
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 10px;
+                        height: 10px;
+                        border-radius: 5px;
+                        background: kit;
+                        border-width: 1px;
+                        border-color: Night.line;
+                    }
+                }
+                Text {
+                    text: index == 0 ? I18n.t("pitch.teamA") : I18n.t("pitch.teamB");
+                    color: Night.muted;
+                    font-size: 11px;
+                    vertical-alignment: center;
                 }
             }
         }

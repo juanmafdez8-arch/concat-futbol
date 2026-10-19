@@ -276,6 +276,8 @@ pub fn run() -> Result<(), slint::PlatformError> {
         editor.set_tag_bars(ModelRc::from(models.tag_bars.clone()));
         editor.set_pitch_dots(ModelRc::from(models.pitch_dots.clone()));
         editor.set_pitch_pairs_shown(ModelRc::from(models.pitch_pairs.clone()));
+        editor.set_pitch_lines(ModelRc::from(models.pitch_lines.clone()));
+        editor.set_pitch_kits(ModelRc::from(models.pitch_kits.clone()));
         app.global::<Library>()
             .set_views(ModelRc::from(models.library_views.clone()));
         editor.set_menu_items(ModelRc::from(models.menu.clone()));

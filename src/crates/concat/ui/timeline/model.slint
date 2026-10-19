@@ -297,9 +297,23 @@ export struct PitchDotData {
     x: float,
     y: float,
     colour: color,
+    /// The colour the number is written in: dark on a light kit, light on
+    /// a dark one.
+    ink: color,
     kind: int,
     id: int,
+    /// The player's number in his team, 0 for none.
+    number: int,
     chosen: bool,
+    /// The last seconds of his run, as path commands over a 1000 square.
+    trail: string,
+}
+
+/// A team line on the pitch board: path commands over a 1000 square, and
+/// the team's kit colour.
+export struct PitchLineData {
+    commands: string,
+    colour: color,
 }
 
 /// A register on the tagging pane's matrix: its category's row, its span.

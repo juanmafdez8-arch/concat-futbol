@@ -14,7 +14,7 @@ import { PaneKind } from "workspace/pane-switcher.slint";
 import { MenuItemData } from "primitives/context-menu.slint";
 import {
     ClipData, ClipField, ClipTextField, DropData, PlayMarkData, SelectedClipData, SelectedTransitionData,
-    PitchDotData, TagBarData, TagButtonData, TagChipData, TagRowData,
+    PitchDotData, PitchLineData, TagBarData, TagButtonData, TagChipData, TagRowData,
     StageGuideData, StageItemData, TimelineTabData, TimelineTool, TrackData,
     TrackSize,
 } from "timeline/model.slint";
@@ -411,6 +411,12 @@ export global Editor {
     /// The pitch board; see Studio's pitch board.
     in-out property <[PitchDotData]> pitch-dots;
     in-out property <[PitchDotData]> pitch-pairs-shown;
+    in-out property <[PitchLineData]> pitch-lines;
+    in-out property <[color]> pitch-kits;
+    /// The board's layers, switched on the board's own bar.
+    in-out property <bool> pitch-show-trails: true;
+    in-out property <bool> pitch-show-lines: true;
+    in-out property <bool> pitch-show-numbers: true;
     in-out property <bool> pitch-calibrated;
     in-out property <bool> pitch-calibrating;
     in-out property <int> pitch-pairs;
