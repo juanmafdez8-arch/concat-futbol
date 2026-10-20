@@ -1060,17 +1060,26 @@ pub fn judge(
 }
 /// Whole numbers bare, the rest to a decimal: a correlation of 0.5 is
 /// not 0, and 35 m is not 35.0.
-fn fmt(v: f64) -> String {
+pub fn fmt(v: f64) -> String {
     if (v - v.round()).abs() < 0.05 {
         format!("{v:.0}")
     } else {
         format!("{v:.1}")
     }
 }
+/// A KPI's unit after a space, or nothing for a count or a ratio.
+pub fn unit_suffix(k: &str) -> &'static str {
+    match unit(k) {
+        "m" => " m",
+        "s" => " s",
+        _ => "",
+    }
+}
+
 fn unit(k: &str) -> &'static str {
     match k {
         "block_length" | "block_length_end" | "nearest_2s" | "width" | "def_line_height"
-        | "line_gap" | "progress_m" => "m",
+        | "line_gap" | "progress_m" | "centroid_depth" | "nearest_ball" => "m",
         "regain_s" | "reorganise_s" => "s",
         _ => "",
     }
