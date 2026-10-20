@@ -282,6 +282,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
         editor.set_pitch_pairs_shown(ModelRc::from(models.pitch_pairs.clone()));
         editor.set_pitch_lines(ModelRc::from(models.pitch_lines.clone()));
         editor.set_pitch_kits(ModelRc::from(models.pitch_kits.clone()));
+        editor.set_pitch_roles(ModelRc::from(models.pitch_roles.clone()));
         app.global::<Library>()
             .set_views(ModelRc::from(models.library_views.clone()));
         editor.set_menu_items(ModelRc::from(models.menu.clone()));
@@ -1363,6 +1364,15 @@ pub fn run() -> Result<(), slint::PlatformError> {
             state.assistant_settings(provider, &model, &key);
         }
     ));
+    editor.on_pitch_player_role(on_window!(|state, id: i32, index: i32| {
+        state.pitch_player_role(id, index);
+    }));
+    editor.on_pitch_dot_moved(on_window!(|state, id: i32, x: f32, y: f32| {
+        state.pitch_dot_moved(id, x, y);
+    }));
+    editor.on_report_build(on_window!(|state| {
+        state.report_build();
+    }));
     editor.on_library_import(on_window!(|state| {
         state.library_import();
     }));

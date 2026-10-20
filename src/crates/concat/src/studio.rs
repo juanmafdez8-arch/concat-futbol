@@ -643,6 +643,8 @@ pub struct Models {
     pub pitch_pairs: Rc<VecModel<PitchDotData>>,
     pub pitch_lines: Rc<VecModel<PitchLineData>>,
     pub pitch_kits: Rc<VecModel<slint::Color>>,
+    /// The roles a player's card offers, none first.
+    pub pitch_roles: Rc<VecModel<SharedString>>,
     pub library_views: Rc<VecModel<LibraryViewData>>,
     pub menu: Rc<VecModel<MenuItemData>>,
     pub bar: Rc<VecModel<MenuItemData>>,
@@ -724,6 +726,7 @@ impl Models {
             pitch_pairs: Rc::new(VecModel::default()),
             pitch_lines: Rc::new(VecModel::default()),
             pitch_kits: Rc::new(VecModel::default()),
+            pitch_roles: Rc::new(VecModel::default()),
             library_views: Rc::new(VecModel::default()),
             menu: Rc::new(VecModel::default()),
             bar: Rc::new(VecModel::default()),
@@ -1043,7 +1046,7 @@ pub struct Studio {
             ),
             Arc<concat_vision::football::pitch::Motion>,
             concat_vision::football::pitch::Calibration,
-            Arc<HashMap<u32, (i32, String)>>,
+            Arc<HashMap<u32, (i32, String, i32)>>,
         )>,
     >,
 
@@ -1079,6 +1082,7 @@ pub struct Studio {
         Option<(
             (
                 std::path::PathBuf,
+                Option<std::time::SystemTime>,
                 Option<std::time::SystemTime>,
                 Option<std::time::SystemTime>,
             ),
@@ -6362,7 +6366,7 @@ impl Studio {
         Arc<concat_vision::football::TrackSet>,
         Arc<concat_vision::football::pitch::Motion>,
         concat_vision::football::pitch::Calibration,
-        Arc<HashMap<u32, (i32, String)>>,
+        Arc<HashMap<u32, (i32, String, i32)>>,
     )> {
         let request = self.football_request(id)?;
         let dir = request.dir();
@@ -6399,7 +6403,7 @@ impl Studio {
                 teams.insert(tracked.id, tracked.team);
             }
         }
-        let mut numbers: HashMap<u32, (i32, String)> = HashMap::new();
+        let mut numbers: HashMap<u32, (i32, String, i32)> = HashMap::new();
         for team in [1u8, 2] {
             let mut ids: Vec<u32> = teams
                 .iter()
@@ -6408,16 +6412,25 @@ impl Studio {
                 .collect();
             ids.sort_unstable();
             for (index, id) in ids.into_iter().enumerate() {
-                numbers.insert(id, (index as i32 + 1, String::new()));
+                numbers.insert(id, (index as i32 + 1, String::new(), 0));
             }
         }
-        // Over them, the real numbers and names the analyst gave.
-        for (id, player) in concat_vision::football::Roster::load(&dir).players {
-            let entry = numbers.entry(id).or_insert((0, String::new()));
+        // Over them, the real numbers, names and roles the analyst gave,
+        // handed on to the tracks that pick a lost player up.
+        for (id, player) in concat_vision::football::Roster::load(&dir).effective(&set) {
+            let entry = numbers.entry(id).or_insert((0, String::new(), 0));
             if let Some(number) = player.number {
                 entry.0 = number as i32;
             }
             entry.1 = player.name.trim().to_string();
+            entry.2 = player
+                .role
+                .and_then(|role| {
+                    concat_vision::football::Role::ALL
+                        .iter()
+                        .position(|r| *r == role)
+                })
+                .map_or(0, |index| index as i32 + 1);
         }
         let numbers = Arc::new(numbers);
         *cache = Some((
@@ -6736,7 +6749,106 @@ impl Studio {
     pub fn pitch_player_number(&mut self, id: i32, text: &str) {
         let digits: String = text.chars().filter(char::is_ascii_digit).take(3).collect();
         let number = digits.parse::<u32>().ok();
-        self.edit_roster(id, |player| player.number = number);
+        let squad = concat_vision::football::Squad::load(&self.eval_dir());
+        let known = number.and_then(|n| squad.find(n).cloned());
+        self.edit_roster(id, |player| {
+            player.number = number;
+            if let Some(known) = known {
+                if player.name.trim().is_empty() {
+                    player.name = known.name.clone();
+                }
+                if player.role.is_none() {
+                    player.role = known.role;
+                }
+            }
+        });
+    }
+
+    /// The chosen player's role picked on her card: 0 for none.
+    pub fn pitch_player_role(&mut self, id: i32, index: i32) {
+        let role = usize::try_from(index - 1)
+            .ok()
+            .and_then(|index| concat_vision::football::Role::ALL.get(index).copied());
+        self.edit_roster(id, |player| player.role = role);
+    }
+
+    /// A dot dragged to where the player really is: her feet in the picture
+    /// and that point of the pitch are a calibration pair. Into the
+    /// calibration of this instant if there is one; else four points read
+    /// off the map in force and this one, weighed twice; else the start of
+    /// a calibration made of players, which counts from the fourth.
+    pub fn pitch_dot_moved(&mut self, id: i32, fx: f32, fy: f32) {
+        use concat_vision::football::pitch;
+        let Ok(id) = u32::try_from(id) else {
+            return;
+        };
+        let Some(clip) = self.board_clip() else {
+            return;
+        };
+        let Some(dir) = self.football_request(&clip.id).map(|request| request.dir()) else {
+            return;
+        };
+        let Some(set) = concat_vision::football::shared(&dir) else {
+            return;
+        };
+        let seconds = self.source_at_playhead(&clip);
+        let Some(tracked) = set.track_at(id, seconds) else {
+            self.notify(&t("pitch.notHere"), true);
+            return;
+        };
+        let (u, v) = pitch::feet(&tracked.bbox);
+        let pair = [
+            u,
+            v,
+            f64::from(fx.clamp(0.0, 1.0)) * pitch::LENGTH,
+            f64::from(fy.clamp(0.0, 1.0)) * pitch::WIDTH,
+        ];
+        let ms = (seconds.max(0.0) * 1000.0).round() as u64;
+        let mut calibration = pitch::Calibration::load(&dir);
+        let motion = pitch::Motion::of(&set);
+        let here = calibration
+            .anchors
+            .iter()
+            .position(|anchor| anchor.ms.abs_diff(ms) <= 1000);
+        let count = match here {
+            Some(index) => {
+                calibration.anchors[index].pairs.push(pair);
+                calibration.anchors[index].pairs.len()
+            }
+            None => match pitch::map_at(&calibration, &motion, ms) {
+                Some(map) => {
+                    let mut pairs: Vec<[f64; 4]> =
+                        [(0.25, 0.4), (0.75, 0.4), (0.8, 0.85), (0.2, 0.85)]
+                            .into_iter()
+                            .filter_map(|(a, b)| {
+                                pitch::apply(&map, (a, b)).map(|(x, y)| [a, b, x, y])
+                            })
+                            .collect();
+                    pairs.push(pair);
+                    pairs.push(pair);
+                    let count = pairs.len();
+                    calibration.anchors.push(pitch::Anchor { ms, pairs });
+                    count
+                }
+                None => {
+                    calibration.anchors.push(pitch::Anchor {
+                        ms,
+                        pairs: vec![pair],
+                    });
+                    1
+                }
+            },
+        };
+        if let Err(error) = calibration.save(&dir) {
+            self.notify(&error, true);
+            return;
+        }
+        if count < 4 {
+            self.notify(&tf("pitch.placedMore", &[&(4 - count)]), false);
+        } else {
+            self.notify(&t("pitch.placed"), false);
+        }
+        self.request_preview();
     }
 
     /// The chosen player's name typed on the board.
@@ -6761,6 +6873,25 @@ impl Studio {
         roster.edit(id, change);
         if let Err(error) = roster.save(&dir) {
             self.notify(&error, true);
+        }
+        // The judged team's player kept in the squad, so the next match
+        // knows her by her number.
+        let team = concat_vision::football::shared(&dir).and_then(|set| {
+            set.instants_of(id)
+                .into_iter()
+                .map(|(_, tracked)| tracked.team)
+                .find(|team| *team != 0)
+        });
+        if team == Some(self.eval_team)
+            && let Some(player) = roster.players.get(&id)
+            && let Some(number) = player.number
+        {
+            let library = self.eval_dir();
+            let mut squad = concat_vision::football::Squad::load(&library);
+            squad.upsert(number, &player.name, player.role);
+            if let Err(error) = squad.save(&library) {
+                log::warn!("football: could not keep the squad: {error}");
+            }
         }
         self.request_preview();
     }
@@ -6788,9 +6919,20 @@ impl Studio {
         // The chosen player's card: his number and name, to be edited.
         let chosen = self.football_chosen.and_then(|id| {
             let (_, _, _, numbers) = state.as_ref()?;
-            let (number, name) = numbers.get(&id).cloned().unwrap_or_default();
+            let (number, name, role) = numbers.get(&id).cloned().unwrap_or_default();
+            editor.set_pitch_chosen_role(role);
             Some((id, number, name))
         });
+        sync(
+            &models.pitch_roles,
+            std::iter::once(SharedString::from(t("pitch.noRole")))
+                .chain(
+                    concat_vision::football::Role::ALL
+                        .iter()
+                        .map(|role| SharedString::from(role.label())),
+                )
+                .collect(),
+        );
         editor.set_pitch_chosen_id(chosen.as_ref().map_or(-1, |(id, _, _)| *id as i32));
         editor.set_pitch_chosen_number(
             chosen
@@ -7571,6 +7713,173 @@ impl Studio {
         self.publish_assistant(editor, models);
     }
 
+    // ── the post-match report ──
+    //
+    // The staff's report, as their slides lay it out: a page per phase -
+    // build-up, press, defensive transition, the block - each saying what
+    // worked, what did not and why, in figures against the game model in
+    // use, with a still of the best and the worst. Written as a page of its
+    // own into the exports folder and opened.
+
+    /// Where reports go: the work folder's exports, beside the library.
+    fn report_dir(&self) -> std::path::PathBuf {
+        self.library_root()
+            .parent()
+            .map(|work| work.join("05 Exportaciones"))
+            .unwrap_or_else(|| std::path::PathBuf::from(r"D:\Concat Futbol\05 Exportaciones"))
+    }
+
+    /// Today as the report names it, from the clock alone.
+    fn report_date() -> String {
+        let days = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_secs() / 86_400) as i64;
+        // Howard Hinnant's civil-from-days.
+        let z = days + 719_468;
+        let era = z.div_euclid(146_097);
+        let doe = z - era * 146_097;
+        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let day = doy - (153 * mp + 2) / 5 + 1;
+        let month = if mp < 10 { mp + 3 } else { mp - 9 };
+        let year = yoe + era * 400 + i64::from(month <= 2);
+        format!("{year:04}-{month:02}-{day:02}")
+    }
+
+    /// The report of this timeline's evaluated registers.
+    pub fn report_build(&mut self) {
+        use concat_vision::football::report;
+        let library = self.eval_library();
+        let Some(profile) = self.eval_profile_in_use(&library) else {
+            return;
+        };
+        let plays = self.plays_in_order();
+        let mut items = Vec::new();
+        for play in &plays {
+            let teaching = play
+                .descriptors
+                .iter()
+                .any(|d| d == Self::LIBRARY_GOOD || d == Self::LIBRARY_BAD);
+            if teaching {
+                continue;
+            }
+            let Some(judged) = self.eval_play(play) else {
+                continue;
+            };
+            let action_name = Self::eval_kind_of(&library, &play.tag)
+                .map_or_else(|| play.tag.clone(), |(_, name, _)| name);
+            items.push(report::Item {
+                action_key: judged.key,
+                action_name,
+                play_id: play.id.clone(),
+                play_name: play.name.clone(),
+                start: play.start,
+                verdict: judged.judgement.verdict,
+                measures: judged.measures,
+            });
+        }
+        if items.is_empty() {
+            self.notify(&t("report.nothing"), true);
+            return;
+        }
+        let phases = report::build(&items, &profile);
+        let names: HashMap<String, String> = items
+            .iter()
+            .map(|item| {
+                (
+                    item.play_id.clone(),
+                    format!("{} · {}", item.play_name, Self::clock(item.start)),
+                )
+            })
+            .collect();
+        // A still of each phase's best and worst, read on a worker.
+        let mut stills: Vec<(String, std::path::PathBuf, f64)> = Vec::new();
+        for phase in &phases {
+            for id in phase.best.iter().take(1).chain(phase.worst.iter().take(1)) {
+                let Some(play) = plays.iter().find(|play| play.id == *id) else {
+                    continue;
+                };
+                let middle = (play.start + play.end) / 2.0;
+                let Some(clip) = self.footage_at(middle) else {
+                    continue;
+                };
+                let Some(media) = self.project().media.iter().find(|m| m.id == clip.media_id)
+                else {
+                    continue;
+                };
+                let seconds = clip.source_start + (middle - clip.start) * clip.speed;
+                stills.push((id.clone(), std::path::PathBuf::from(&media.path), seconds));
+            }
+        }
+        let title = format!("Informe · {}", self.timeline().name);
+        let subtitle = format!("{} · {}", profile.name, Self::report_date());
+        let folder = self.report_dir().join(format!(
+            "Informe {} {}",
+            Self::report_date(),
+            self.timeline()
+                .name
+                .chars()
+                .filter(|c| c.is_alphanumeric() || *c == ' ')
+                .collect::<String>()
+        ));
+        self.notify(&t("report.writing"), false);
+        std::thread::spawn(move || {
+            let written = (|| -> Result<std::path::PathBuf, String> {
+                std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
+                let mut thumbs = HashMap::new();
+                for (id, path, seconds) in stills {
+                    let file = format!("{id}.jpg");
+                    if Self::report_still(&path, seconds, &folder.join(&file)).is_ok() {
+                        thumbs.insert(id, file);
+                    }
+                }
+                let html = report::to_html(&title, &subtitle, &phases, &thumbs, &names);
+                let page = folder.join("informe.html");
+                std::fs::write(&page, html).map_err(|error| error.to_string())?;
+                Ok(page)
+            })();
+            crate::host::on_ui(move |studio, _, _| match written {
+                Ok(page) => {
+                    let _ = opener::open(&page);
+                    studio.notify(&tf("report.written", &[&page.display()]), false);
+                }
+                Err(error) => studio.notify(&error, true),
+            });
+        });
+    }
+
+    /// One frame of `path` at `seconds`, 640 wide, as a JPEG.
+    fn report_still(
+        path: &std::path::Path,
+        seconds: f64,
+        out: &std::path::Path,
+    ) -> Result<(), String> {
+        use concat_core::time::Rational;
+        use concat_media::{DecodeOptions, Decoder, FrameSource};
+        let summary = media::probe(&path.to_string_lossy())?;
+        let (w, h) = summary.video.as_ref().map_or((1920, 1080), |video| {
+            (video.width.max(1), video.height.max(1))
+        });
+        let height = ((640.0 * f64::from(h) / f64::from(w)).round() as u32).max(2) & !1;
+        let options = DecodeOptions::default()
+            .starting_at(Rational::new((seconds.max(0.0) * 1000.0) as i64, 1000))
+            .scaled_to(640, height)
+            .limited_to(1);
+        let mut decoder = Decoder::open(path, &options).map_err(|error| error.to_string())?;
+        let frame = decoder
+            .next_frame()
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "no frame".to_string())?;
+        let rgba =
+            image::RgbaImage::from_raw(frame.width(), frame.height(), frame.pixels().to_vec())
+                .ok_or_else(|| "unexpected frame".to_string())?;
+        image::DynamicImage::ImageRgba8(rgba)
+            .to_rgb8()
+            .save_with_format(out, image::ImageFormat::Jpeg)
+            .map_err(|error| error.to_string())
+    }
+
     // ── the reference library ──
     //
     // The coach's examples kept as files: a folder per action under
@@ -7964,6 +8273,7 @@ Qué herramienta usar:
 - «crea una acción…» → `crear_accion` con disparador perdida, recuperacion, posesion_rival, salida o manual.
 - «móntame un vídeo/resumen…» → `crear_video`.
 - «importa la biblioteca / los vídeos de referencia» → `importar_biblioteca`; «analiza todos los clips» → `analizar_todo`; «aprende de la biblioteca / de los ejemplos» → `aprender_biblioteca`.
+- «hazme el informe / el post-partido» → `informe`.
 - «qué sabes / qué has aprendido / reglas» → `ver_modelo`. Estado general → `estado`.
 
 Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque defensivo / basculación y las creadas por el cuerpo técnico. Veredictos: Bien, Mejorable, Mal, Sin datos. Para evaluar hacen falta jugadores analizados y el campograma calibrado: si una herramienta dice que falta, explica el paso al usuario.";
@@ -8057,6 +8367,11 @@ Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque
                 "disparador": {"type": "string", "enum": ["perdida", "recuperacion", "posesion_rival", "salida", "manual"]},
                 "segundos": {"type": "number", "description": "Duración de la ventana"},
                 "kpis": {"type": "array", "items": {"type": "string"}}}, "required": ["nombre", "disparador"]}),
+            ),
+            tool(
+                "informe",
+                "Genera el informe post-partido (por fases: qué funcionó, qué no funcionó, por qué pasó, con imágenes) de las jugadas evaluadas, con el modelo de juego en uso.",
+                none.clone(),
             ),
             tool(
                 "importar_biblioteca",
@@ -8540,6 +8855,13 @@ Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque
                 self.library_analyse_all();
                 self.toast.message.to_string()
             }
+            "informe" => {
+                self.report_build();
+                format!(
+                    "{} El informe se abre solo en el navegador al terminar.",
+                    self.toast.message
+                )
+            }
             "aprender_biblioteca" => {
                 self.library_learn();
                 self.toast.message.to_string()
@@ -8838,7 +9160,12 @@ Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque
                 .and_then(|meta| meta.modified())
                 .ok()
         };
-        let key = (dir.clone(), stamp("tracks.json"), stamp("calibration.json"));
+        let key = (
+            dir.clone(),
+            stamp("tracks.json"),
+            stamp("calibration.json"),
+            stamp("roster.json"),
+        );
         let mut cache = self.eval_context_cache.borrow_mut();
         if let Some((held, context)) = cache.as_ref()
             && *held == key
@@ -8849,7 +9176,8 @@ Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque
         if calibration.anchors.is_empty() {
             return None;
         }
-        let context = Arc::new(Context::new(&set, &calibration));
+        let players = concat_vision::football::Roster::load(&dir).effective(&set);
+        let context = Arc::new(Context::with_players(&set, &calibration, &players));
         *cache = Some((key, Arc::clone(&context)));
         Some(context)
     }
@@ -8907,12 +9235,13 @@ Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque
         action: Option<concat_vision::football::eval::Action>,
         start_ms: u64,
         end_ms: u64,
+        team: u8,
     ) -> Option<Judged> {
         use concat_vision::football::{eval, learn};
         let profile = self.eval_profile_in_use(library)?;
         let window = learn::Window {
             key: key.to_string(),
-            team: self.eval_team,
+            team,
             start_ms,
             end_ms,
         };
@@ -8921,7 +9250,7 @@ Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque
             Some(action) => {
                 let occurrence = eval::Occurrence {
                     action,
-                    team: self.eval_team,
+                    team,
                     start_ms,
                     end_ms,
                 };
@@ -8963,6 +9292,13 @@ Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque
     /// A register measured and judged: its category names the action, the
     /// footage under it is the match, the team is the one being judged.
     fn eval_play(&self, play: &model::Play) -> Option<Judged> {
+        self.eval_play_as(play, None)
+    }
+
+    /// [`Self::eval_play`] for a given team; `None` is the judged one. A
+    /// library register picks its own: the side without the ball for an
+    /// action without it, the side with it for a build-up.
+    fn eval_play_as(&self, play: &model::Play, team: Option<u8>) -> Option<Judged> {
         let library = self.eval_library();
         let (key, _, action) = Self::eval_kind_of(&library, &play.tag)?;
         let clip = self.footage_at((play.start + play.end) / 2.0)?;
@@ -8972,14 +9308,33 @@ Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque
             let seconds = clip.source_start + (at - clip.start) * clip.speed;
             (seconds.max(0.0) * 1000.0).round() as u64
         };
-        self.eval_window(
-            &library,
-            &context,
-            &key,
-            action,
-            source(play.start),
-            source(play.end),
-        )
+        let (start_ms, end_ms) = (source(play.start), source(play.end));
+        let team = team.unwrap_or_else(|| {
+            let library_clip = play
+                .descriptors
+                .iter()
+                .any(|d| d == Self::LIBRARY_GOOD || d == Self::LIBRARY_BAD);
+            if !library_clip {
+                return self.eval_team;
+            }
+            let mut held = [0usize; 3];
+            for (ms, team) in &context.possession {
+                if (start_ms..=end_ms).contains(ms)
+                    && let Some(team @ 1..=2) = team
+                {
+                    held[usize::from(*team)] += 1;
+                }
+            }
+            let (more, less) = if held[1] >= held[2] { (1, 2) } else { (2, 1) };
+            if held[1] == held[2] {
+                self.eval_team
+            } else if key == "build_up" {
+                more
+            } else {
+                less
+            }
+        });
+        self.eval_window(&library, &context, &key, action, start_ms, end_ms, team)
     }
 
     /// Evaluate: the actions of the judged team found in the footage - the
@@ -9102,8 +9457,15 @@ Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque
             if start < clip.start || start >= end || stop <= start {
                 continue;
             }
-            let Some(judged) = self.eval_window(&library, &context, &key, action, start_ms, end_ms)
-            else {
+            let Some(judged) = self.eval_window(
+                &library,
+                &context,
+                &key,
+                action,
+                start_ms,
+                end_ms,
+                self.eval_team,
+            ) else {
                 continue;
             };
             let verdict = judged.judgement.verdict;

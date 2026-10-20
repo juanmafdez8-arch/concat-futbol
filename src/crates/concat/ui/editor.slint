@@ -468,6 +468,14 @@ export global Editor {
     in-out property <string> pitch-chosen-name;
     callback pitch-player-number(id: int, text: string);
     callback pitch-player-name(id: int, text: string);
+    /// The chosen player's role, by its place in `pitch-roles` (0 none).
+    in-out property <[string]> pitch-roles;
+    in-out property <int> pitch-chosen-role;
+    callback pitch-player-role(id: int, index: int);
+    /// A dot dragged to where the player really is, as board fractions.
+    callback pitch-dot-moved(id: int, x: float, y: float);
+    /// The post-match report.
+    callback report-build();
     in-out property <float> frame-rate;
     in-out property <float> scroll-left;
     in-out property <float> seconds-per-pixel;

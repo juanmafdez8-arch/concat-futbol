@@ -560,6 +560,11 @@ export component TaggingPane inherits Pane {
                         }
                     }
 
+                    Button {
+                        label: I18n.t("report.build");
+                        clicked => { Editor.report-build(); }
+                    }
+
                     if Editor.eval-kind > 0: VerticalLayout {
                         spacing: 4px;
                         HorizontalLayout {

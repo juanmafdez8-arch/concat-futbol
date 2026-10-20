@@ -17,6 +17,7 @@
 
 import { I18n } from "../i18n.slint";
 import { Button, Field } from "../primitives/modal.slint";
+import { Select } from "../primitives/select.slint";
 import { Tip } from "../primitives/tooltip.slint";
 import { PitchDotData, PitchLineData } from "../timeline/model.slint";
 import { Editor } from "../editor.slint";
@@ -198,8 +199,9 @@ export component PitchPane inherits Pane {
             }
         }
 
-        // The chosen player's card: his number and name.
-        if Editor.pitch-chosen-id >= 0 && !Editor.pitch-calibrating: HorizontalLayout {
+        // The chosen player's card: her number, her name and her role.
+        if Editor.pitch-chosen-id >= 0 && !Editor.pitch-calibrating: VerticalLayout {
+          HorizontalLayout {
             padding-left: 12px;
             padding-right: 12px;
             padding-top: 8px;
@@ -230,6 +232,32 @@ export component PitchPane inherits Pane {
                     edited(text) => { Editor.pitch-player-number(Editor.pitch-chosen-id, text); }
                 }
             }
+          }
+          HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-top: 6px;
+            spacing: 6px;
+            Text {
+                text: I18n.t("pitch.role");
+                color: Night.muted;
+                font-size: 11px;
+                vertical-alignment: center;
+            }
+            Select {
+                horizontal-stretch: 1;
+                options: Editor.pitch-roles;
+                current: Editor.pitch-chosen-role;
+                changed(index) => { Editor.pitch-player-role(Editor.pitch-chosen-id, index); }
+            }
+          }
+          Text {
+            x: 12px;
+            text: I18n.t("pitch.dragHint");
+            color: Night.muted;
+            font-size: 10px;
+            wrap: word-wrap;
+          }
         }
 
         // The board, as large as the pane allows at the pitch's shape.
@@ -331,8 +359,14 @@ export component PitchPane inherits Pane {
                 // number in the ink that reads on it; the chosen one ringed.
                 for dot in Editor.pitch-dots: Rectangle {
                     property <length> size: dot.kind == 3 ? 8px : 19px;
-                    x: dot.x * parent.width - self.size / 2;
-                    y: dot.y * parent.height - self.size / 2;
+                    // A drag in progress: where the pointer went down, and how
+                    // far the dot has been carried.
+                    property <length> start-x;
+                    property <length> start-y;
+                    property <length> dx;
+                    property <length> dy;
+                    x: dot.x * parent.width - self.size / 2 + self.dx;
+                    y: dot.y * parent.height - self.size / 2 + self.dy;
                     width: self.size;
                     height: self.size;
 
@@ -373,8 +407,30 @@ export component PitchPane inherits Pane {
                     }
 
                     if !Editor.pitch-calibrating && dot.kind != 3: TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { Editor.pitch-dot-clicked(dot.id); }
+                        mouse-cursor: self.pressed ? MouseCursor.grabbing : MouseCursor.pointer;
+                        pointer-event(event) => {
+                            if (event.kind == PointerEventKind.down) {
+                                parent.start-x = self.absolute-position.x + self.mouse-x;
+                                parent.start-y = self.absolute-position.y + self.mouse-y;
+                            }
+                            if (event.kind == PointerEventKind.up) {
+                                if (Math.abs(parent.dx) + Math.abs(parent.dy) > 4px) {
+                                    Editor.pitch-dot-moved(dot.id,
+                                        (dot.x * board.width + parent.dx) / board.width,
+                                        (dot.y * board.height + parent.dy) / board.height);
+                                } else {
+                                    Editor.pitch-dot-clicked(dot.id);
+                                }
+                                parent.dx = 0;
+                                parent.dy = 0;
+                            }
+                        }
+                        moved => {
+                            if (self.pressed) {
+                                parent.dx = self.absolute-position.x + self.mouse-x - parent.start-x;
+                                parent.dy = self.absolute-position.y + self.mouse-y - parent.start-y;
+                            }
+                        }
                     }
                 }
 
