@@ -403,6 +403,11 @@ export global Editor {
     callback eval-team-pick(team: int);
     callback eval-open-library();
     callback eval-tune();
+    /// The reference library: import its folders, analyse every clip,
+    /// learn from them.
+    callback library-import();
+    callback library-analyse();
+    callback library-learn();
 
     /// The assistant; see Studio's assistant. `assistant-provider`: 0
     /// automatic, 1 local, 2 Claude.

@@ -1062,6 +1062,8 @@ pub struct Studio {
     assistant_busy: bool,
     /// Which model answered last: "local" or "claude".
     assistant_provider_used: String,
+    /// Library clips waiting for the player analysis, by clip id.
+    library_queue: Vec<String>,
     /// The microphone, while the coach is talking to the assistant.
     assistant_recorder: Option<concat_host::record::Recorder>,
     /// What was said, being written out.
@@ -2248,6 +2250,7 @@ impl Studio {
             assistant_busy: false,
             assistant_provider_used: String::new(),
             assistant_recorder: None,
+            library_queue: Vec::new(),
             assistant_hearing: false,
             assistant_config: RefCell::new(None),
             eval_library_cache: RefCell::new(None),
@@ -7568,6 +7571,375 @@ impl Studio {
         self.publish_assistant(editor, models);
     }
 
+    // ── the reference library ──
+    //
+    // The coach's examples kept as files: a folder per action under
+    // `02 Referencias`, each with `Así sí` and `Así no`. Import lays every
+    // clip end to end on a timeline of its own, each under a register of
+    // its action carrying its side; Analyse all runs the player analysis on
+    // each in turn; Learn keeps every register whose clip is analysed and
+    // calibrated as a reference and retrains once. Calibrating each clip -
+    // four points - stays the coach's: nothing else can say where the
+    // pitch is.
+
+    /// The descriptor a library register carries: which side it teaches.
+    const LIBRARY_GOOD: &'static str = "Así sí";
+    const LIBRARY_BAD: &'static str = "Así no";
+    /// And once it has been learned, so a second Learn does not count it twice.
+    const LIBRARY_LEARNED: &'static str = "Aprendida";
+
+    /// Where the library's folders are: beside the model's folder when that
+    /// is the one on D:, else the usual place.
+    fn library_root(&self) -> std::path::PathBuf {
+        let strip = |path: std::path::PathBuf| {
+            let text = path.to_string_lossy().into_owned();
+            std::path::PathBuf::from(text.strip_prefix(r"\\?\").unwrap_or(&text).to_string())
+        };
+        std::fs::canonicalize(self.eval_dir())
+            .ok()
+            .map(strip)
+            .and_then(|model| model.parent().map(|work| work.join("02 Referencias")))
+            .filter(|root| root.is_dir())
+            .unwrap_or_else(|| std::path::PathBuf::from(r"D:\Concat Futbol\02 Referencias"))
+    }
+
+    /// The action a library folder names: one of the four, matched loosely
+    /// ("Bloque defensivo - basculación" is "Bloque defensivo / basculación").
+    fn library_action_of(folder: &str) -> Option<String> {
+        let plain = |s: &str| {
+            s.to_lowercase()
+                .chars()
+                .filter(|c| c.is_alphanumeric())
+                .collect::<String>()
+        };
+        let folder = plain(folder);
+        Self::EVAL_ACTIONS
+            .iter()
+            .map(|action| action.name().to_string())
+            .find(|name| plain(name) == folder)
+    }
+
+    /// Import: every video in the library onto a new timeline, end to end,
+    /// each under a register of its action marked with its side.
+    pub fn library_import(&mut self) {
+        use concat_vision::football::learn;
+        if self.session.is_none() {
+            return;
+        }
+        let root = self.library_root();
+        let videos = ["mp4", "mov", "mkv", "avi", "m4v", "mts", "webm"];
+        let listed = |dir: &std::path::Path| -> Vec<std::path::PathBuf> {
+            let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+                .map(|entries| entries.filter_map(|e| e.ok()).map(|e| e.path()).collect())
+                .unwrap_or_default();
+            files.sort();
+            files
+        };
+        // (action name, good, file); and the coach's own actions met on the way.
+        let mut found: Vec<(String, bool, std::path::PathBuf)> = Vec::new();
+        let mut own: Vec<String> = Vec::new();
+        let mut folders: Vec<(String, std::path::PathBuf)> = Vec::new();
+        for dir in listed(&root).into_iter().filter(|p| p.is_dir()) {
+            let name = dir
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if name.starts_with('_') {
+                for inner in listed(&dir).into_iter().filter(|p| p.is_dir()) {
+                    let inner_name = inner
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    own.push(inner_name.clone());
+                    folders.push((inner_name, inner));
+                }
+            } else if let Some(action) = Self::library_action_of(&name) {
+                folders.push((action, dir));
+            }
+        }
+        for (action, dir) in folders {
+            for (side, good) in [(Self::LIBRARY_GOOD, true), (Self::LIBRARY_BAD, false)] {
+                for file in listed(&dir.join(side)) {
+                    let video = file
+                        .extension()
+                        .map(|e| e.to_string_lossy().to_lowercase())
+                        .is_some_and(|e| videos.contains(&e.as_str()));
+                    if video {
+                        found.push((action.clone(), good, file));
+                    }
+                }
+            }
+        }
+        if found.is_empty() {
+            self.notify(&tf("library.empty", &[&root.display()]), true);
+            return;
+        }
+        // The coach's own actions the library names, kept as actions whose
+        // window is the whole clip.
+        let library = self.eval_library();
+        let mut actions = library.actions.clone();
+        let before = actions.len();
+        for name in own {
+            if !actions.iter().any(|a| a.name.eq_ignore_ascii_case(&name)) {
+                let key: String = name
+                    .to_lowercase()
+                    .chars()
+                    .map(|c| if c.is_alphanumeric() { c } else { '_' })
+                    .collect();
+                actions.push(learn::ActionDef {
+                    key,
+                    name,
+                    trigger: learn::Trigger::Manual,
+                    window_s: 15.0,
+                    kpis: learn::GENERIC_KPIS.iter().map(|k| k.to_string()).collect(),
+                });
+            }
+        }
+        if actions.len() != before
+            && let Err(error) = learn::save_actions(&self.eval_dir(), &actions)
+        {
+            self.notify(&error, true);
+        }
+        let count = found.len();
+        self.notify(&tf("library.probing", &[&count]), false);
+        spawn_in_project(
+            move || {
+                found
+                    .into_iter()
+                    .map(|(action, good, file)| {
+                        let summary = media::probe(&file.to_string_lossy());
+                        (action, good, summary)
+                    })
+                    .collect::<Vec<_>>()
+            },
+            |studio, _, _, probed| studio.library_lay_out(probed),
+        );
+    }
+
+    /// The probed library on a timeline of its own.
+    fn library_lay_out(
+        &mut self,
+        probed: Vec<(
+            String,
+            bool,
+            Result<concat_host::media::MediaSummary, String>,
+        )>,
+    ) {
+        let gesture = "library-import";
+        self.apply_in(Some(gesture), Command::AddTimeline);
+        let timeline_id = self.timeline().id.clone();
+        self.apply_in(
+            Some(gesture),
+            Command::RenameTimeline {
+                timeline_id,
+                name: t("library.timeline"),
+            },
+        );
+        let Some(lane) = self.timeline().tracks.first().map(|track| track.id.clone()) else {
+            self.end_burst();
+            return;
+        };
+        // The categories, as an evaluation run lays them.
+        let library = self.eval_library();
+        let mut template = self.tag_template();
+        let names: Vec<String> = Self::EVAL_ACTIONS
+            .iter()
+            .map(|a| a.name().to_string())
+            .chain(library.actions.iter().map(|a| a.name.clone()))
+            .collect();
+        let palette = [
+            [0xe7, 0x4c, 0x3c],
+            [0x34, 0x98, 0xdb],
+            [0x2e, 0xcc, 0x71],
+            [0x9b, 0x59, 0xb6],
+            [0xe6, 0x7e, 0x22],
+            [0x1a, 0xbc, 0x9c],
+        ];
+        let had = template.categories.len();
+        for (index, name) in names.into_iter().enumerate() {
+            if !template.categories.iter().any(|c| c.name == name) {
+                template.categories.push(model::TagCategory {
+                    name,
+                    colour: palette[index % palette.len()],
+                    lead: 0.0,
+                    lag: 10.0,
+                });
+            }
+        }
+        if template.categories.len() != had {
+            self.apply_in(Some(gesture), Command::SetTagTemplate { template });
+        }
+        let mut plays: Vec<model::Play> = Vec::new();
+        let mut cursor = 0.0;
+        let mut failed = 0;
+        let mut number = self
+            .project()
+            .timelines
+            .iter()
+            .flat_map(|timeline| timeline.plays.iter())
+            .filter_map(|play| play.id.strip_prefix('p')?.parse::<u32>().ok())
+            .max()
+            .unwrap_or(0);
+        for (action, good, summary) in probed {
+            let Ok(summary) = summary else {
+                failed += 1;
+                continue;
+            };
+            let item = summary.to_new_media();
+            let path = item.path.clone();
+            let media_id = self
+                .apply_in(Some(gesture), Command::AddMedia { item })
+                .or_else(|| {
+                    self.project()
+                        .media
+                        .iter()
+                        .find(|m| m.path == path)
+                        .map(|m| m.id.clone())
+                });
+            let Some(media_id) = media_id else {
+                failed += 1;
+                continue;
+            };
+            let Some(clip_id) = self.apply_in(
+                Some(gesture),
+                Command::AddClip {
+                    media_id,
+                    track_id: lane.clone(),
+                    start: cursor,
+                    ripple: false,
+                },
+            ) else {
+                failed += 1;
+                continue;
+            };
+            let Some(duration) = self.clip(&clip_id).map(|clip| clip.duration) else {
+                continue;
+            };
+            number += 1;
+            let same = plays.iter().filter(|p| p.tag == action).count() + 1;
+            let side = if good {
+                Self::LIBRARY_GOOD
+            } else {
+                Self::LIBRARY_BAD
+            };
+            plays.push(model::Play {
+                id: format!("p{number}"),
+                name: format!("{action} {same} ({side})"),
+                tag: action,
+                start: cursor,
+                end: cursor + duration,
+                descriptors: vec![side.to_string()],
+                rating: if good { 5 } else { 1 },
+            });
+            // A second between clips, so no register touches the next.
+            cursor += duration + 1.0;
+        }
+        let laid = plays.len();
+        self.apply_in(Some(gesture), Command::SetPlays { plays });
+        self.end_burst();
+        self.seek(0.0);
+        if failed > 0 {
+            self.notify(&tf("library.importedSome", &[&laid, &failed]), true);
+        } else {
+            self.notify(&tf("library.imported", &[&laid]), false);
+        }
+    }
+
+    /// Analyse all: every video clip of this timeline not yet analysed, one
+    /// after another.
+    pub fn library_analyse_all(&mut self) {
+        let pending: Vec<String> = self
+            .timeline()
+            .clips
+            .iter()
+            .filter(|clip| clip.kind == model::ClipKind::Video && !self.football_analysed(&clip.id))
+            .map(|clip| clip.id.clone())
+            .collect();
+        if pending.is_empty() {
+            self.notify(&t("library.allAnalysed"), false);
+            return;
+        }
+        self.notify(&tf("library.analysing", &[&pending.len()]), false);
+        self.library_queue = pending;
+        self.library_next();
+    }
+
+    /// The next clip of the queue to the analysis, when it is free.
+    pub fn library_next(&mut self) {
+        if self.football_job.is_some() {
+            return;
+        }
+        while let Some(id) = self.library_queue.first().cloned() {
+            self.library_queue.remove(0);
+            if self.clip(&id).is_some() && !self.football_analysed(&id) {
+                self.selection = vec![id];
+                self.football_analyse();
+                return;
+            }
+        }
+    }
+
+    /// Learn: every library register whose clip is analysed and calibrated
+    /// kept as a reference, and the models trained again, once.
+    pub fn library_learn(&mut self) {
+        use concat_vision::football::{eval::Reference, learn};
+        let plays: Vec<model::Play> = self.timeline().plays.clone();
+        let mut references = self.eval_library().references.clone();
+        let (mut good, mut bad, mut waiting) = (0usize, 0usize, Vec::new());
+        let mut learned_ids = Vec::new();
+        for play in &plays {
+            let side = if play.descriptors.iter().any(|d| d == Self::LIBRARY_GOOD) {
+                true
+            } else if play.descriptors.iter().any(|d| d == Self::LIBRARY_BAD) {
+                false
+            } else {
+                continue;
+            };
+            if play.descriptors.iter().any(|d| d == Self::LIBRARY_LEARNED) {
+                continue;
+            }
+            let Some(judged) = self.eval_play(play) else {
+                waiting.push(play.name.clone());
+                continue;
+            };
+            references.push(Reference {
+                action_key: judged.key,
+                good: side,
+                measures: judged.measures,
+            });
+            learned_ids.push(play.id.clone());
+            if side {
+                good += 1;
+            } else {
+                bad += 1;
+            }
+        }
+        if !learned_ids.is_empty() {
+            let models = learn::retrain_all(&references);
+            let written = self
+                .eval_write("references.json", &references)
+                .and_then(|()| self.eval_write("models.json", &models));
+            if let Err(error) = written {
+                self.notify(&error, true);
+                return;
+            }
+            let mut plays = plays;
+            for play in plays.iter_mut().filter(|p| learned_ids.contains(&p.id)) {
+                play.descriptors.push(Self::LIBRARY_LEARNED.to_string());
+            }
+            self.apply(Command::SetPlays { plays });
+        }
+        let mut message = tf("library.learned", &[&good, &bad]);
+        if !waiting.is_empty() {
+            message.push_str(" · ");
+            message.push_str(&tf(
+                "library.waiting",
+                &[&waiting.len(), &waiting.join(", ")],
+            ));
+        }
+        self.notify(&message, good + bad == 0 && !waiting.is_empty());
+    }
+
     // ── the assistant ──
     //
     // An assistant that works the analysis by being asked, in Spanish, by
@@ -7591,6 +7963,7 @@ Qué herramienta usar:
 - En `cambiar_umbral` no toques `eliminatoria` salvo que lo pidan expresamente.
 - «crea una acción…» → `crear_accion` con disparador perdida, recuperacion, posesion_rival, salida o manual.
 - «móntame un vídeo/resumen…» → `crear_video`.
+- «importa la biblioteca / los vídeos de referencia» → `importar_biblioteca`; «analiza todos los clips» → `analizar_todo`; «aprende de la biblioteca / de los ejemplos» → `aprender_biblioteca`.
 - «qué sabes / qué has aprendido / reglas» → `ver_modelo`. Estado general → `estado`.
 
 Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque defensivo / basculación y las creadas por el cuerpo técnico. Veredictos: Bien, Mejorable, Mal, Sin datos. Para evaluar hacen falta jugadores analizados y el campograma calibrado: si una herramienta dice que falta, explica el paso al usuario.";
@@ -7684,6 +8057,21 @@ Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque
                 "disparador": {"type": "string", "enum": ["perdida", "recuperacion", "posesion_rival", "salida", "manual"]},
                 "segundos": {"type": "number", "description": "Duración de la ventana"},
                 "kpis": {"type": "array", "items": {"type": "string"}}}, "required": ["nombre", "disparador"]}),
+            ),
+            tool(
+                "importar_biblioteca",
+                "Importa los vídeos de la biblioteca de referencias (carpetas «Así sí» / «Así no» de cada acción en D:\\Concat Futbol\\02 Referencias) en una línea de tiempo nueva, ya etiquetados.",
+                none.clone(),
+            ),
+            tool(
+                "analizar_todo",
+                "Analiza los jugadores de todos los clips de la línea de tiempo actual que falten, uno tras otro.",
+                none.clone(),
+            ),
+            tool(
+                "aprender_biblioteca",
+                "Guarda como referencias todas las jugadas de la biblioteca ya analizadas y calibradas y reentrena la IA.",
+                none.clone(),
             ),
             tool(
                 "crear_video",
@@ -8143,6 +8531,18 @@ Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque
                 }
                 self.build_highlights_from(plays, name.clone());
                 format!("Vídeo «{name}» montado con {count} jugadas en una línea de tiempo nueva")
+            }
+            "importar_biblioteca" => {
+                self.library_import();
+                format!("{} (se completa en segundo plano)", self.toast.message)
+            }
+            "analizar_todo" => {
+                self.library_analyse_all();
+                self.toast.message.to_string()
+            }
+            "aprender_biblioteca" => {
+                self.library_learn();
+                self.toast.message.to_string()
             }
             other => format!("Herramienta desconocida: {other}"),
         }
@@ -9688,6 +10088,7 @@ Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque
                         studio.land_pending_mark();
                         studio.request_preview();
                         studio.ensure_football_silhouettes();
+                        studio.library_next();
                     }
                     Err(error) => {
                         // The press kept for it would land on whatever is
@@ -9696,6 +10097,7 @@ Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque
                         if !error.contains("cancelled") {
                             studio.notify(&tf("football.failed", &[&error]), true);
                         }
+                        studio.library_next();
                     }
                 }
             },

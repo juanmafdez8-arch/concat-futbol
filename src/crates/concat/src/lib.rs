@@ -1363,6 +1363,15 @@ pub fn run() -> Result<(), slint::PlatformError> {
             state.assistant_settings(provider, &model, &key);
         }
     ));
+    editor.on_library_import(on_window!(|state| {
+        state.library_import();
+    }));
+    editor.on_library_analyse(on_window!(|state| {
+        state.library_analyse_all();
+    }));
+    editor.on_library_learn(on_window!(|state| {
+        state.library_learn();
+    }));
     editor.on_eval_tune(on_window!(|state| {
         state.eval_tune();
     }));

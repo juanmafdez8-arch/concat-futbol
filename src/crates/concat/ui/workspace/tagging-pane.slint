@@ -534,6 +534,32 @@ export component TaggingPane inherits Pane {
                         }
                     }
 
+                    // The reference library on D:.
+                    HorizontalLayout {
+                        spacing: 6px;
+                        Text {
+                            text: I18n.t("library.title");
+                            color: Theme.fg-muted;
+                            font-size: Theme.fs - 1px;
+                            vertical-alignment: center;
+                        }
+                        Button {
+                            label: I18n.t("library.import");
+                            ghost: true;
+                            clicked => { Editor.library-import(); }
+                        }
+                        Button {
+                            label: I18n.t("library.analyse");
+                            ghost: true;
+                            clicked => { Editor.library-analyse(); }
+                        }
+                        Button {
+                            label: I18n.t("library.learn");
+                            ghost: true;
+                            clicked => { Editor.library-learn(); }
+                        }
+                    }
+
                     if Editor.eval-kind > 0: VerticalLayout {
                         spacing: 4px;
                         HorizontalLayout {
