@@ -977,7 +977,19 @@ pub fn judge(
     refs: &[Reference],
     observability: f64,
 ) -> Judgement {
-    let rules = profile.rules.get(action.key()).cloned().unwrap_or_default();
+    judge_key(action.key(), measures, profile, refs, observability)
+}
+
+/// [`judge`] for any action by its key: one of the four, or one the coach
+/// defined, whose rules the profile keeps under the same key.
+pub fn judge_key(
+    key: &str,
+    measures: &Measures,
+    profile: &Profile,
+    refs: &[Reference],
+    observability: f64,
+) -> Judgement {
+    let rules = profile.rules.get(key).cloned().unwrap_or_default();
     let mut outcome = RuleOutcome {
         passed: 0,
         failed: Vec::new(),

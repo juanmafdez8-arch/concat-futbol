@@ -73,7 +73,10 @@ impl Host {
         Ok(Host {
             titles: concat_host::Titles::new(&dirs),
             cutouts: Arc::new(concat_host::Cutouts::new(&dirs.data)),
-            footballs: Arc::new(concat_host::Footballs::new(&dirs.data, Arc::clone(&brushes))),
+            footballs: Arc::new(concat_host::Footballs::new(
+                &dirs.data,
+                Arc::clone(&brushes),
+            )),
             brushes,
             enhancers: Arc::new(concat_host::Enhancers::new(&dirs.data)),
             reversers: Arc::new(concat_host::Reversers::new()),

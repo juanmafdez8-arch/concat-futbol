@@ -274,6 +274,8 @@ pub fn run() -> Result<(), slint::PlatformError> {
         editor.set_tag_rows(ModelRc::from(models.tag_rows.clone()));
         editor.set_tag_filter_options(ModelRc::from(models.tag_filter_options.clone()));
         editor.set_tag_bars(ModelRc::from(models.tag_bars.clone()));
+        editor.set_eval_profiles(ModelRc::from(models.eval_profiles.clone()));
+        editor.set_eval_reasons(ModelRc::from(models.eval_reasons.clone()));
         editor.set_pitch_dots(ModelRc::from(models.pitch_dots.clone()));
         editor.set_pitch_pairs_shown(ModelRc::from(models.pitch_pairs.clone()));
         editor.set_pitch_lines(ModelRc::from(models.pitch_lines.clone()));
@@ -1332,6 +1334,24 @@ pub fn run() -> Result<(), slint::PlatformError> {
     }));
     editor.on_pitch_dot_clicked(on_window!(|state, id: i32| {
         state.pitch_dot_clicked(id);
+    }));
+    editor.on_eval_run(on_window!(|state| {
+        state.eval_run();
+    }));
+    editor.on_eval_reference(on_window!(|state, good: bool| {
+        state.eval_reference(good);
+    }));
+    editor.on_eval_profile_pick(on_window!(|state, index: i32| {
+        state.eval_profile_pick(index);
+    }));
+    editor.on_eval_team_pick(on_window!(|state, team: i32| {
+        state.eval_team_pick(team);
+    }));
+    editor.on_eval_tune(on_window!(|state| {
+        state.eval_tune();
+    }));
+    editor.on_eval_open_library(on_window!(|state| {
+        state.eval_open_library();
     }));
     editor.on_pitch_player_number(on_window!(|state, id: i32, text: SharedString| {
         state.pitch_player_number(id, &text);

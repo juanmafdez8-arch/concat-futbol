@@ -386,6 +386,23 @@ export global Editor {
     /// The registers listed, out as Sportscode XML (`xml`) or CSV; and a
     /// Sportscode XML edit list in.
     callback tag-export(xml: bool);
+
+    /// The evaluation; see Studio's evaluation. `eval-kind` is the verdict
+    /// of the register in hand: 0 none, 1 good, 2 improvable, 3 bad, 4 not
+    /// enough seen.
+    in-out property <[string]> eval-profiles;
+    in-out property <int> eval-profile;
+    in-out property <int> eval-team: 1;
+    in-out property <int> eval-kind;
+    in-out property <string> eval-verdict;
+    in-out property <[string]> eval-reasons;
+    in-out property <string> eval-refs;
+    callback eval-run();
+    callback eval-reference(good: bool);
+    callback eval-profile-pick(index: int);
+    callback eval-team-pick(team: int);
+    callback eval-open-library();
+    callback eval-tune();
     callback tag-import();
     in-out property <[TagBarData]> tag-bars;
 

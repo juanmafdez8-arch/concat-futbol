@@ -124,6 +124,20 @@ export component TaggingPane inherits Pane {
     /// What the template editor's two fields hold.
     property <string> new-category;
     property <string> new-descriptor;
+    /// A verdict's colour: green, amber, red, or grey for not enough seen.
+    function verdict-colour(kind: int) -> color {
+        if (kind == 1) {
+            return #2ecc71;
+        }
+        if (kind == 2) {
+            return #f5c518;
+        }
+        if (kind == 3) {
+            return #e74c3c;
+        }
+        return #8b949e;
+    }
+
     /// Buttons and chips per row.
     property <int> across: root.width > 520px ? 4 : root.width > 340px ? 3 : 2;
 
@@ -455,6 +469,121 @@ export component TaggingPane inherits Pane {
                             TouchArea {
                                 mouse-cursor: pointer;
                                 clicked => { Editor.tag-rate(star + 1); }
+                            }
+                        }
+                    }
+                }
+
+                // ── the evaluation: the game model, the team, the run; and
+                // for the register in hand its verdict, its reasons, and the
+                // two buttons that keep it as a reference ──
+                if !Editor.tag-editing: VerticalLayout {
+                    spacing: 6px;
+                    Text {
+                        text: I18n.t("eval.title");
+                        color: Theme.fg;
+                        font-size: Theme.fs;
+                        font-weight: 600;
+                    }
+
+                    HorizontalLayout {
+                        spacing: 6px;
+                        Select {
+                            horizontal-stretch: 1;
+                            options: Editor.eval-profiles;
+                            current: Editor.eval-profile;
+                            changed(index) => { Editor.eval-profile-pick(index); }
+                        }
+                        Button {
+                            label: I18n.t("eval.library");
+                            ghost: true;
+                            clicked => { Editor.eval-open-library(); }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 6px;
+                        Text {
+                            text: I18n.t("eval.ourTeam");
+                            color: Theme.fg-muted;
+                            font-size: Theme.fs - 1px;
+                            vertical-alignment: center;
+                        }
+                        for kit[index] in Editor.pitch-kits: VerticalLayout {
+                            alignment: center;
+                            Rectangle {
+                                width: 22px;
+                                height: 22px;
+                                border-radius: 11px;
+                                background: kit;
+                                border-width: Editor.eval-team == index + 1 ? 3px : 1px;
+                                border-color: Editor.eval-team == index + 1 ? Theme.accent : Theme.line;
+                                TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { Editor.eval-team-pick(index + 1); }
+                                }
+                            }
+                        }
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+                        Button {
+                            label: I18n.t("eval.run");
+                            primary: true;
+                            clicked => { Editor.eval-run(); }
+                        }
+                    }
+
+                    if Editor.eval-kind > 0: VerticalLayout {
+                        spacing: 4px;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: start;
+                            Rectangle {
+                                height: 22px;
+                                width: verdict.preferred-width + 18px;
+                                border-radius: 11px;
+                                background: root.verdict-colour(Editor.eval-kind).with-alpha(0.18);
+                                border-width: 1px;
+                                border-color: root.verdict-colour(Editor.eval-kind);
+                                verdict := Text {
+                                    text: Editor.eval-verdict;
+                                    color: root.verdict-colour(Editor.eval-kind);
+                                    font-size: Theme.fs - 1px;
+                                    font-weight: 600;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            Text {
+                                text: Editor.eval-refs;
+                                color: Theme.fg-muted;
+                                font-size: Theme.fs - 2px;
+                                vertical-alignment: center;
+                            }
+                        }
+                        for reason in Editor.eval-reasons: Text {
+                            text: "• " + reason;
+                            color: Theme.fg;
+                            font-size: Theme.fs - 1px;
+                            wrap: word-wrap;
+                        }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Button {
+                                label: I18n.t("eval.refGood");
+                                ghost: true;
+                                clicked => { Editor.eval-reference(true); }
+                            }
+                            Button {
+                                label: I18n.t("eval.refBad");
+                                ghost: true;
+                                clicked => { Editor.eval-reference(false); }
+                            }
+                            Button {
+                                label: I18n.t("eval.tune");
+                                ghost: true;
+                                clicked => { Editor.eval-tune(); }
                             }
                         }
                     }

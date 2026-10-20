@@ -632,6 +632,10 @@ pub struct Models {
     pub tag_rows: Rc<VecModel<TagRowData>>,
     pub tag_filter_options: Rc<VecModel<SharedString>>,
     pub tag_bars: Rc<VecModel<TagBarData>>,
+    /// The evaluation: the library's profiles, and the reasons for the
+    /// register in hand's verdict.
+    pub eval_profiles: Rc<VecModel<SharedString>>,
+    pub eval_reasons: Rc<VecModel<SharedString>>,
     /// The pitch board's dots, and a calibration's points on it.
     pub pitch_dots: Rc<VecModel<PitchDotData>>,
     pub pitch_pairs: Rc<VecModel<PitchDotData>>,
@@ -710,6 +714,8 @@ impl Models {
             tag_chips: Rc::new(VecModel::default()),
             tag_rows: Rc::new(VecModel::default()),
             tag_filter_options: Rc::new(VecModel::default()),
+            eval_profiles: Rc::new(VecModel::default()),
+            eval_reasons: Rc::new(VecModel::default()),
             tag_bars: Rc::new(VecModel::default()),
             pitch_dots: Rc::new(VecModel::default()),
             pitch_pairs: Rc::new(VecModel::default()),
@@ -1041,6 +1047,25 @@ pub struct Studio {
     // ── tagging ──
     /// The register in hand: the last one made or picked, by id.
     tag_current: Option<String>,
+    /// The evaluation's profile in use, by its place in the library.
+    eval_profile: usize,
+    /// The team the evaluation judges: 1 or 2, as the analysis split kits.
+    eval_team: u8,
+    /// The coach's library, keyed by its files' times.
+    #[allow(clippy::type_complexity)]
+    eval_library_cache: RefCell<Option<([Option<std::time::SystemTime>; 4], Arc<EvalLibrary>)>>,
+    /// A clip's analysis read onto the pitch, keyed by its files' times.
+    #[allow(clippy::type_complexity)]
+    eval_context_cache: RefCell<
+        Option<(
+            (
+                std::path::PathBuf,
+                Option<std::time::SystemTime>,
+                Option<std::time::SystemTime>,
+            ),
+            Arc<concat_vision::football::eval::Context>,
+        )>,
+    >,
     /// The category the tagging pane's list shows, by name; all when none.
     tag_filter: Option<String>,
     /// The fewest stars a register needs to be listed.
@@ -2199,6 +2224,10 @@ impl Studio {
             calibrating: None,
             board_cache: RefCell::new(None),
             tag_current: None,
+            eval_profile: 0,
+            eval_team: 1,
+            eval_library_cache: RefCell::new(None),
+            eval_context_cache: RefCell::new(None),
             tag_filter: None,
             tag_min_rating: 0,
             tag_editing: false,
@@ -5475,7 +5504,10 @@ impl Studio {
     /// the monitor composites it.
     pub fn stage_dragged(&mut self, x: f32, y: f32, snap: bool) {
         let mut gesture = std::mem::replace(&mut self.gesture, Gesture::None);
-        if let Gesture::Draw { anchors, screen, .. } = &mut gesture {
+        if let Gesture::Draw {
+            anchors, screen, ..
+        } = &mut gesture
+        {
             if let (Some(end), Some(last)) = (anchors.last_mut(), screen.last_mut()) {
                 *last = (x, y);
                 end.track = None;
@@ -5956,7 +5988,11 @@ impl Studio {
         let wanted = usize::try_from(index)
             .ok()
             .filter(|index| *index < Self::DRAW_KINDS.len());
-        self.draw_tool = if wanted == self.draw_tool { None } else { wanted };
+        self.draw_tool = if wanted == self.draw_tool {
+            None
+        } else {
+            wanted
+        };
         self.draw_draft = None;
         if self.draw_tool.is_some() {
             self.painting = false;
@@ -6017,7 +6053,13 @@ impl Studio {
         last.bend = style.bend;
         last.colour = style.colour;
         if drawings != clip.drawings {
-            self.apply_in(Some(gesture), Command::SetClipDrawings { clip_id: id, drawings });
+            self.apply_in(
+                Some(gesture),
+                Command::SetClipDrawings {
+                    clip_id: id,
+                    drawings,
+                },
+            );
         }
     }
 
@@ -6025,10 +6067,15 @@ impl Studio {
     /// picture showing on the stage.
     fn draw_target(&self) -> Option<Clip> {
         self.draw_tool?;
-        let clip = self.sole_selection().and_then(|id| self.clip(&id).cloned())?;
+        let clip = self
+            .sole_selection()
+            .and_then(|id| self.clip(&id).cloned())?;
         (clip.kind.is_visual()
             && !self.locked(&clip.track_id)
-            && self.stage_clips().into_iter().any(|shown| shown.id == clip.id))
+            && self
+                .stage_clips()
+                .into_iter()
+                .any(|shown| shown.id == clip.id))
         .then_some(clip)
     }
 
@@ -6233,7 +6280,10 @@ impl Studio {
         }
         let mut drawings = clip.drawings.clone();
         drawings.pop();
-        self.apply(Command::SetClipDrawings { clip_id: id, drawings });
+        self.apply(Command::SetClipDrawings {
+            clip_id: id,
+            drawings,
+        });
     }
 
     /// Takes every drawing off the selected clip.
@@ -6265,7 +6315,9 @@ impl Studio {
         let picked = self
             .sole_selection()
             .and_then(|id| self.clip(&id).cloned())
-            .filter(|clip| clip.kind == model::ClipKind::Video || clip.kind == model::ClipKind::Image);
+            .filter(|clip| {
+                clip.kind == model::ClipKind::Video || clip.kind == model::ClipKind::Image
+            });
         picked.or_else(|| {
             self.stage_clips()
                 .into_iter()
@@ -6303,7 +6355,12 @@ impl Studio {
         if let Some((held, motion, calibration, numbers)) = cache.as_ref()
             && *held == key
         {
-            return Some((set, Arc::clone(motion), calibration.clone(), Arc::clone(numbers)));
+            return Some((
+                set,
+                Arc::clone(motion),
+                calibration.clone(),
+                Arc::clone(numbers),
+            ));
         }
         let motion = Arc::new(concat_vision::football::pitch::Motion::of(&set));
         let calibration = concat_vision::football::pitch::Calibration::load(&dir);
@@ -6336,7 +6393,12 @@ impl Studio {
             entry.1 = player.name.trim().to_string();
         }
         let numbers = Arc::new(numbers);
-        *cache = Some((key, Arc::clone(&motion), calibration.clone(), Arc::clone(&numbers)));
+        *cache = Some((
+            key,
+            Arc::clone(&motion),
+            calibration.clone(),
+            Arc::clone(&numbers),
+        ));
         Some((set, motion, calibration, numbers))
     }
 
@@ -6363,7 +6425,11 @@ impl Studio {
             set.team_colours
                 .get(usize::from(team.max(1)) - 1)
                 .copied()
-                .unwrap_or(if team == 2 { [91, 141, 239] } else { [242, 201, 76] })
+                .unwrap_or(if team == 2 {
+                    [91, 141, 239]
+                } else {
+                    [242, 201, 76]
+                })
         };
         // The trail's instants, each with its map, worked out once for
         // every player.
@@ -6445,7 +6511,11 @@ impl Studio {
                     .map(|held| SharedString::from(held.1.as_str()))
                     .unwrap_or_default(),
                 chosen: self.football_chosen == Some(tracked.id),
-                trail: if tracked.kind == Kind::Ball { SharedString::new() } else { trail(tracked.id).into() },
+                trail: if tracked.kind == Kind::Ball {
+                    SharedString::new()
+                } else {
+                    trail(tracked.id).into()
+                },
             });
         }
         // The lines: a team defends the goal its players stand nearer; its
@@ -6457,7 +6527,11 @@ impl Studio {
                 continue;
             }
             let mean_x = players.iter().map(|p| p.0).sum::<f64>() / players.len() as f64;
-            let own_goal = if mean_x < pitch::LENGTH / 2.0 { 0.0 } else { pitch::LENGTH };
+            let own_goal = if mean_x < pitch::LENGTH / 2.0 {
+                0.0
+            } else {
+                pitch::LENGTH
+            };
             let mut by_depth = players.clone();
             by_depth.sort_by(|a, b| (a.0 - own_goal).abs().total_cmp(&(b.0 - own_goal).abs()));
             let [r, g, b] = kit_of(*team);
@@ -6611,7 +6685,9 @@ impl Studio {
         };
         let dir = request.dir();
         let mut calibration = pitch::Calibration::load(&dir);
-        calibration.anchors.retain(|anchor| anchor.ms.abs_diff(ms) > 1000);
+        calibration
+            .anchors
+            .retain(|anchor| anchor.ms.abs_diff(ms) > 1000);
         calibration.anchors.push(pitch::Anchor { ms, pairs });
         match calibration.save(&dir) {
             Ok(()) => self.notify(&t("pitch.calibrated"), false),
@@ -6647,7 +6723,10 @@ impl Studio {
         let Ok(id) = u32::try_from(id) else {
             return;
         };
-        let Some(request) = self.board_clip().and_then(|clip| self.football_request(&clip.id)) else {
+        let Some(request) = self
+            .board_clip()
+            .and_then(|clip| self.football_request(&clip.id))
+        else {
             return;
         };
         let dir = request.dir();
@@ -6666,10 +6745,15 @@ impl Studio {
         sync(&models.pitch_lines, lines);
         sync(&models.pitch_pairs, self.board_pairs());
         // The legend and the badge from the cache the layers just filled.
-        let state = self.board_clip().and_then(|clip| self.board_state(&clip.id));
+        let state = self
+            .board_clip()
+            .and_then(|clip| self.board_state(&clip.id));
         sync(
             &models.pitch_kits,
-            state.as_ref().map(|(set, _, _, _)| Self::board_kits(set)).unwrap_or_default(),
+            state
+                .as_ref()
+                .map(|(set, _, _, _)| Self::board_kits(set))
+                .unwrap_or_default(),
         );
         let calibrated = state
             .as_ref()
@@ -6692,8 +6776,16 @@ impl Studio {
         editor.set_pitch_chosen_name(chosen.map(|(_, _, name)| name).unwrap_or_default().into());
         editor.set_pitch_calibrated(calibrated);
         editor.set_pitch_calibrating(self.calibrating.is_some());
-        editor.set_pitch_pairs(self.calibrating.as_ref().map_or(0, |state| state.2.len() as i32));
-        editor.set_pitch_waiting(self.calibrating.as_ref().is_some_and(|state| state.3.is_some()));
+        editor.set_pitch_pairs(
+            self.calibrating
+                .as_ref()
+                .map_or(0, |state| state.2.len() as i32),
+        );
+        editor.set_pitch_waiting(
+            self.calibrating
+                .as_ref()
+                .is_some_and(|state| state.3.is_some()),
+        );
     }
 
     // ── the analysis toolbar ──
@@ -6790,7 +6882,10 @@ impl Studio {
     fn analysis_target(&mut self, x: f32, y: f32) -> Option<Clip> {
         if let Some(clip) = self.sole_selection().and_then(|id| self.clip(&id).cloned())
             && clip.kind.is_visual()
-            && self.stage_clips().into_iter().any(|shown| shown.id == clip.id)
+            && self
+                .stage_clips()
+                .into_iter()
+                .any(|shown| shown.id == clip.id)
         {
             return Some(clip);
         }
@@ -6883,8 +6978,10 @@ impl Studio {
         match self.dock_before_analysis.take() {
             Some(before) => self.dock = before,
             None => {
-                self.dock_before_analysis =
-                    Some(std::mem::replace(&mut self.dock, crate::dock::analysis_dock()));
+                self.dock_before_analysis = Some(std::mem::replace(
+                    &mut self.dock,
+                    crate::dock::analysis_dock(),
+                ));
             }
         }
     }
@@ -6965,7 +7062,11 @@ impl Studio {
             .max()
             .unwrap_or(0)
             + 1;
-        let same = plays.iter().filter(|play| play.tag == category.name).count() + 1;
+        let same = plays
+            .iter()
+            .filter(|play| play.tag == category.name)
+            .count()
+            + 1;
         let id = format!("p{number}");
         plays.push(model::Play {
             id: id.clone(),
@@ -6984,7 +7085,11 @@ impl Studio {
     /// there.
     fn tag_in_hand(&self) -> Option<model::Play> {
         let id = self.tag_current.as_ref()?;
-        self.timeline().plays.iter().find(|play| play.id == *id).cloned()
+        self.timeline()
+            .plays
+            .iter()
+            .find(|play| play.id == *id)
+            .cloned()
     }
 
     /// Changes the register in hand with `edit`, as one undo step.
@@ -7031,7 +7136,13 @@ impl Studio {
     /// A register picked from the list: in hand, the playhead at its start
     /// and its stretch marked.
     pub fn tag_select(&mut self, id: &str) {
-        let Some(play) = self.timeline().plays.iter().find(|play| play.id == id).cloned() else {
+        let Some(play) = self
+            .timeline()
+            .plays
+            .iter()
+            .find(|play| play.id == id)
+            .cloned()
+        else {
             return;
         };
         self.tag_current = Some(play.id);
@@ -7108,7 +7219,9 @@ impl Studio {
         ];
         let mut template = self.tag_template();
         let colour = ROUND[template.categories.len() % ROUND.len()];
-        template.categories.push(model::TagCategory::new(name, colour));
+        template
+            .categories
+            .push(model::TagCategory::new(name, colour));
         self.set_tag_template(template);
     }
 
@@ -7138,10 +7251,7 @@ impl Studio {
         } else {
             category.lag = seconds;
         }
-        self.apply_in(
-            Some("tag-time"),
-            Command::SetTagTemplate { template },
-        );
+        self.apply_in(Some("tag-time"), Command::SetTagTemplate { template });
     }
 
     /// A descriptor added to the template.
@@ -7188,19 +7298,32 @@ impl Studio {
         };
         let extension = if xml { "xml" } else { "csv" };
         let suggested = format!("{}.{extension}", self.timeline().name);
-        let title = t(if xml { "tag.exportXml" } else { "tag.exportCsv" });
+        let title = t(if xml {
+            "tag.exportXml"
+        } else {
+            "tag.exportCsv"
+        });
         let family = if xml { "Sportscode XML" } else { "CSV" }.to_owned();
         let directory = self.exchange_dir();
         let count = plays.len();
         crate::host::after_dialog(
             move || {
-                let chosen =
-                    crate::platform::save_file(&title, &directory, &suggested, (family.as_str(), &[extension]))?;
-                Some(if chosen.extension().is_some_and(|ext| ext.eq_ignore_ascii_case(extension)) {
-                    chosen
-                } else {
-                    chosen.with_extension(extension)
-                })
+                let chosen = crate::platform::save_file(
+                    &title,
+                    &directory,
+                    &suggested,
+                    (family.as_str(), &[extension]),
+                )?;
+                Some(
+                    if chosen
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case(extension))
+                    {
+                        chosen
+                    } else {
+                        chosen.with_extension(extension)
+                    },
+                )
             },
             move |studio, _, _, file: std::path::PathBuf| match std::fs::write(&file, text) {
                 Ok(()) => studio.notify(
@@ -7254,7 +7377,11 @@ impl Studio {
         let mut template = self.tag_template();
         let before = template.categories.len();
         for category in imported.categories {
-            if !template.categories.iter().any(|held| held.name == category.name) {
+            if !template
+                .categories
+                .iter()
+                .any(|held| held.name == category.name)
+            {
                 template.categories.push(category);
             }
         }
@@ -7302,7 +7429,10 @@ impl Studio {
                     } else {
                         SharedString::new()
                     },
-                    count: plays.iter().filter(|play| play.tag == category.name).count() as i32,
+                    count: plays
+                        .iter()
+                        .filter(|play| play.tag == category.name)
+                        .count() as i32,
                     lead: category.lead as f32,
                     lag: category.lag as f32,
                 }
@@ -7313,7 +7443,10 @@ impl Studio {
     /// The tagging pane's descriptors, lit where the register in hand has
     /// them.
     fn tag_chips(&self) -> Vec<TagChipData> {
-        let held = self.tag_in_hand().map(|play| play.descriptors).unwrap_or_default();
+        let held = self
+            .tag_in_hand()
+            .map(|play| play.descriptors)
+            .unwrap_or_default();
         self.tag_template()
             .descriptors
             .into_iter()
@@ -7377,20 +7510,637 @@ impl Studio {
         sync(&models.tag_bars, self.tag_bars());
         let template = self.tag_template();
         let options: Vec<SharedString> = std::iter::once(t("tag.all").into())
-            .chain(template.categories.iter().map(|category| category.name.clone().into()))
+            .chain(
+                template
+                    .categories
+                    .iter()
+                    .map(|category| category.name.clone().into()),
+            )
             .collect();
         sync(&models.tag_filter_options, options);
         editor.set_tag_filter(
             self.tag_filter
                 .as_ref()
-                .and_then(|tag| template.categories.iter().position(|category| category.name == *tag))
+                .and_then(|tag| {
+                    template
+                        .categories
+                        .iter()
+                        .position(|category| category.name == *tag)
+                })
                 .map_or(-1, |index| index as i32),
         );
         editor.set_tag_min_rating(i32::from(self.tag_min_rating));
         editor.set_tag_editing(self.tag_editing);
         let in_hand = self.tag_in_hand();
-        editor.set_tag_current(in_hand.as_ref().map(|play| play.name.clone()).unwrap_or_default().into());
+        editor.set_tag_current(
+            in_hand
+                .as_ref()
+                .map(|play| play.name.clone())
+                .unwrap_or_default()
+                .into(),
+        );
         editor.set_tag_rating(in_hand.map_or(0, |play| i32::from(play.rating)));
+        self.publish_evaluation(editor, models);
+    }
+
+    // ── evaluation ──
+    //
+    // The analysis judged against the team's game model: the four collective
+    // actions found in the footage, and any the coach defined, measured in
+    // metres on the calibrated pitch and judged three ways - the chosen
+    // profile's rules, the closeness to the reference examples, and the
+    // model the app learned from those examples. The profiles, references,
+    // learned models and own actions are the coach's library, kept in the
+    // app's config rather than in a project, so what was taught on one
+    // match judges the next.
+
+    /// The four actions, in the order the template lists them.
+    const EVAL_ACTIONS: [concat_vision::football::eval::Action; 4] = [
+        concat_vision::football::eval::Action::PressAfterLoss,
+        concat_vision::football::eval::Action::RecoveryRun,
+        concat_vision::football::eval::Action::BuildUp,
+        concat_vision::football::eval::Action::DefensiveBlock,
+    ];
+
+    /// The descriptor that marks a register the evaluation made, so a new
+    /// run replaces its own and leaves the analyst's alone.
+    const EVAL_AUTO: &'static str = "Auto";
+
+    /// Where the library lives.
+    pub fn eval_dir(&self) -> std::path::PathBuf {
+        self.host.dirs.config.join("football")
+    }
+
+    /// The library, read again only when one of its files changes.
+    pub fn eval_library(&self) -> Arc<EvalLibrary> {
+        use concat_vision::football::{eval::Profile, learn};
+        let dir = self.eval_dir();
+        let stamp = |name: &str| {
+            std::fs::metadata(dir.join(name))
+                .and_then(|meta| meta.modified())
+                .ok()
+        };
+        let key = [
+            stamp("profiles.json"),
+            stamp("references.json"),
+            stamp("models.json"),
+            stamp("actions.json"),
+        ];
+        let mut cache = self.eval_library_cache.borrow_mut();
+        if let Some((held, library)) = cache.as_ref()
+            && *held == key
+        {
+            return Arc::clone(library);
+        }
+        let mut profiles = Profile::load(&dir);
+        if profiles.is_empty() {
+            profiles = Profile::presets();
+        }
+        let library = Arc::new(EvalLibrary {
+            profiles,
+            references: std::fs::read(dir.join("references.json"))
+                .ok()
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                .unwrap_or_default(),
+            models: learn::load_models(&dir),
+            actions: learn::load_actions(&dir),
+        });
+        *cache = Some((key, Arc::clone(&library)));
+        library
+    }
+
+    /// The profile in use.
+    fn eval_profile_in_use(
+        &self,
+        library: &EvalLibrary,
+    ) -> Option<concat_vision::football::eval::Profile> {
+        library
+            .profiles
+            .get(self.eval_profile)
+            .or_else(|| library.profiles.first())
+            .cloned()
+    }
+
+    /// The analysis of clip `id` read onto the pitch, once per change of its
+    /// tracks or its calibration.
+    fn eval_context(&self, id: &str) -> Option<Arc<concat_vision::football::eval::Context>> {
+        use concat_vision::football::{eval::Context, pitch::Calibration};
+        let dir = self.football_request(id)?.dir();
+        let set = concat_vision::football::shared(&dir)?;
+        let stamp = |name: &str| {
+            std::fs::metadata(dir.join(name))
+                .and_then(|meta| meta.modified())
+                .ok()
+        };
+        let key = (dir.clone(), stamp("tracks.json"), stamp("calibration.json"));
+        let mut cache = self.eval_context_cache.borrow_mut();
+        if let Some((held, context)) = cache.as_ref()
+            && *held == key
+        {
+            return Some(Arc::clone(context));
+        }
+        let calibration = Calibration::load(&dir);
+        if calibration.anchors.is_empty() {
+            return None;
+        }
+        let context = Arc::new(Context::new(&set, &calibration));
+        *cache = Some((key, Arc::clone(&context)));
+        Some(context)
+    }
+
+    /// The footage under timeline second `at`.
+    fn footage_at(&self, at: f64) -> Option<Clip> {
+        self.timeline()
+            .clips
+            .iter()
+            .find(|clip| {
+                clip.kind == model::ClipKind::Video
+                    && clip.start <= at
+                    && at < clip.start + clip.duration
+            })
+            .map(|clip| (**clip).clone())
+    }
+
+    /// The action a category names: its key, its name and, for one of the
+    /// four, which.
+    fn eval_kind_of(
+        library: &EvalLibrary,
+        tag: &str,
+    ) -> Option<(
+        String,
+        String,
+        Option<concat_vision::football::eval::Action>,
+    )> {
+        if let Some(action) = Self::EVAL_ACTIONS
+            .into_iter()
+            .find(|action| action.name() == tag)
+        {
+            return Some((
+                action.key().to_string(),
+                action.name().to_string(),
+                Some(action),
+            ));
+        }
+        library
+            .actions
+            .iter()
+            .find(|def| def.name == tag)
+            .map(|def| (def.key.clone(), def.name.clone(), None))
+    }
+
+    /// One window measured and judged three ways. The four actions are
+    /// measured by their own KPIs with the generic ones beside them, a
+    /// coach's action by the generic ones; the rules and references judge
+    /// it, and the learned model, when there is one, may move the verdict a
+    /// step.
+    fn eval_window(
+        &self,
+        library: &EvalLibrary,
+        context: &concat_vision::football::eval::Context,
+        key: &str,
+        action: Option<concat_vision::football::eval::Action>,
+        start_ms: u64,
+        end_ms: u64,
+    ) -> Option<Judged> {
+        use concat_vision::football::{eval, learn};
+        let profile = self.eval_profile_in_use(library)?;
+        let window = learn::Window {
+            key: key.to_string(),
+            team: self.eval_team,
+            start_ms,
+            end_ms,
+        };
+        let (generic, observability) = learn::measure_window(context, &window)?;
+        let mut measures = match action {
+            Some(action) => {
+                let occurrence = eval::Occurrence {
+                    action,
+                    team: self.eval_team,
+                    start_ms,
+                    end_ms,
+                };
+                context.assess(&occurrence, &profile, &[])?.0
+            }
+            None => eval::Measures::new(),
+        };
+        for (kpi, value) in generic {
+            measures.entry(kpi).or_insert(value);
+        }
+        let references: Vec<eval::Reference> = library
+            .references
+            .iter()
+            .filter(|r| r.action_key == key)
+            .cloned()
+            .collect();
+        let mut judgement = eval::judge_key(key, &measures, &profile, &references, observability);
+        if let Some(model) = library.models.iter().find(|model| model.action_key == key) {
+            let prediction = model.predict(&measures);
+            judgement.verdict = learn::blend(judgement.verdict, Some(&prediction));
+            let accuracy = model
+                .loo_accuracy
+                .map(|a| format!(", acierto {:.0} %", a * 100.0))
+                .unwrap_or_default();
+            judgement.reasons.push(format!(
+                "IA ({} ejemplos{accuracy}): {:.0} % parecido a vuestro «así sí»",
+                model.n_good + model.n_bad,
+                prediction.p_good * 100.0
+            ));
+            judgement.reasons.extend(model.explain(&prediction));
+        }
+        Some(Judged {
+            key: key.to_string(),
+            measures,
+            judgement,
+        })
+    }
+
+    /// A register measured and judged: its category names the action, the
+    /// footage under it is the match, the team is the one being judged.
+    fn eval_play(&self, play: &model::Play) -> Option<Judged> {
+        let library = self.eval_library();
+        let (key, _, action) = Self::eval_kind_of(&library, &play.tag)?;
+        let clip = self.footage_at((play.start + play.end) / 2.0)?;
+        let context = self.eval_context(&clip.id)?;
+        let source = |at: f64| {
+            let at = at.clamp(clip.start, clip.start + clip.duration);
+            let seconds = clip.source_start + (at - clip.start) * clip.speed;
+            (seconds.max(0.0) * 1000.0).round() as u64
+        };
+        self.eval_window(
+            &library,
+            &context,
+            &key,
+            action,
+            source(play.start),
+            source(play.end),
+        )
+    }
+
+    /// Evaluate: the actions of the judged team found in the footage - the
+    /// four and the coach's own - each a register under its action's
+    /// category, carrying its verdict as a descriptor and as stars. A run
+    /// replaces the registers the last one made over the same footage.
+    pub fn eval_run(&mut self) {
+        use concat_vision::football::{eval::Verdict, learn};
+        let Some(clip) = self
+            .board_clip()
+            .filter(|clip| clip.kind == model::ClipKind::Video)
+        else {
+            self.notify(&t("eval.noFootage"), true);
+            return;
+        };
+        if !self.football_analysed(&clip.id) {
+            self.notify(&t("eval.needsAnalysis"), true);
+            return;
+        }
+        let Some(context) = self.eval_context(&clip.id) else {
+            self.notify(&t("eval.needsCalibration"), true);
+            return;
+        };
+        let library = self.eval_library();
+        let end = clip.start + clip.duration;
+        let timeline_at =
+            |ms: u64| clip.start + (ms as f64 / 1000.0 - clip.source_start) / clip.speed.max(1e-6);
+
+        // Every window to judge: the four actions' and the coach's own.
+        let mut windows: Vec<(
+            String,
+            String,
+            Option<concat_vision::football::eval::Action>,
+            u64,
+            u64,
+        )> = context
+            .occurrences()
+            .into_iter()
+            .filter(|occurrence| occurrence.team == self.eval_team)
+            .map(|o| {
+                (
+                    o.action.key().to_string(),
+                    o.action.name().to_string(),
+                    Some(o.action),
+                    o.start_ms,
+                    o.end_ms,
+                )
+            })
+            .collect();
+        for def in &library.actions {
+            for w in learn::find_windows(&context, def, self.eval_team) {
+                windows.push((
+                    def.key.clone(),
+                    def.name.clone(),
+                    None,
+                    w.start_ms,
+                    w.end_ms,
+                ));
+            }
+        }
+
+        // The categories, added once, each reaching as far as its window.
+        let mut template = self.tag_template();
+        let before = template.categories.len();
+        let palette = [
+            [0xe7, 0x4c, 0x3c],
+            [0x34, 0x98, 0xdb],
+            [0x2e, 0xcc, 0x71],
+            [0x9b, 0x59, 0xb6],
+            [0xe6, 0x7e, 0x22],
+            [0x1a, 0xbc, 0x9c],
+            [0xf1, 0xc4, 0x0f],
+        ];
+        let names: Vec<(String, f64)> = Self::EVAL_ACTIONS
+            .iter()
+            .zip([6.0, 10.0, 8.0, 15.0])
+            .map(|(action, lag)| (action.name().to_string(), lag))
+            .chain(
+                library
+                    .actions
+                    .iter()
+                    .map(|def| (def.name.clone(), def.window_s)),
+            )
+            .collect();
+        for (index, (name, lag)) in names.into_iter().enumerate() {
+            if !template
+                .categories
+                .iter()
+                .any(|category| category.name == name)
+            {
+                template.categories.push(model::TagCategory {
+                    name,
+                    colour: palette[index % palette.len()],
+                    lead: 0.0,
+                    lag,
+                });
+            }
+        }
+
+        // Out with the last run's registers over this footage.
+        let mut plays: Vec<model::Play> = self
+            .timeline()
+            .plays
+            .iter()
+            .filter(|play| {
+                let ours = play.descriptors.iter().any(|d| d == Self::EVAL_AUTO)
+                    && Self::eval_kind_of(&library, &play.tag).is_some();
+                !(ours && play.start < end && play.end > clip.start)
+            })
+            .cloned()
+            .collect();
+        let mut number = plays
+            .iter()
+            .filter_map(|play| play.id.strip_prefix('p')?.parse::<u32>().ok())
+            .max()
+            .unwrap_or(0);
+        let (mut good, mut improvable, mut bad, mut unknown) = (0, 0, 0, 0);
+        for (key, name, action, start_ms, end_ms) in windows {
+            let (start, stop) = (timeline_at(start_ms), timeline_at(end_ms).min(end));
+            if start < clip.start || start >= end || stop <= start {
+                continue;
+            }
+            let Some(judged) = self.eval_window(&library, &context, &key, action, start_ms, end_ms)
+            else {
+                continue;
+            };
+            let verdict = judged.judgement.verdict;
+            let rating = match verdict {
+                Verdict::Good => {
+                    good += 1;
+                    5
+                }
+                Verdict::Improvable => {
+                    improvable += 1;
+                    3
+                }
+                Verdict::Bad => {
+                    bad += 1;
+                    1
+                }
+                Verdict::Unknown => {
+                    unknown += 1;
+                    0
+                }
+            };
+            number += 1;
+            let same = plays.iter().filter(|play| play.tag == name).count() + 1;
+            plays.push(model::Play {
+                id: format!("p{number}"),
+                name: format!("{name} {same}"),
+                tag: name,
+                start,
+                end: stop,
+                descriptors: vec![Self::EVAL_AUTO.to_string(), verdict.label().to_string()],
+                rating,
+            });
+        }
+        plays.sort_by(|a, b| a.start.total_cmp(&b.start));
+        let gesture = "evaluate";
+        if template.categories.len() != before {
+            self.apply_in(Some(gesture), Command::SetTagTemplate { template });
+        }
+        self.apply_in(Some(gesture), Command::SetPlays { plays });
+        self.end_burst();
+        let total = good + improvable + bad + unknown;
+        self.notify(&tf("eval.done", &[&total, &good, &improvable, &bad]), false);
+    }
+
+    /// Writes one of the library's files.
+    fn eval_write<T: serde::Serialize + ?Sized>(
+        &self,
+        name: &str,
+        value: &T,
+    ) -> Result<(), String> {
+        let dir = self.eval_dir();
+        std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+        let bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
+        std::fs::write(dir.join(name), bytes).map_err(|error| error.to_string())
+    }
+
+    /// The register in hand kept as a reference - the action done the way
+    /// the team wants it, or the way it does not - and the models learned
+    /// again from every reference kept.
+    pub fn eval_reference(&mut self, good: bool) {
+        use concat_vision::football::{eval::Reference, learn};
+        let Some(play) = self.tag_in_hand() else {
+            self.notify(&t("tag.tagFirst"), true);
+            return;
+        };
+        let Some(judged) = self.eval_play(&play) else {
+            self.notify(&t("eval.notAnAction"), true);
+            return;
+        };
+        let library = self.eval_library();
+        let mut references = library.references.clone();
+        references.push(Reference {
+            action_key: judged.key.clone(),
+            good,
+            measures: judged.measures,
+        });
+        let models = learn::retrain_all(&references);
+        let written = self
+            .eval_write("references.json", &references)
+            .and_then(|()| self.eval_write("models.json", &models));
+        if let Err(error) = written {
+            self.notify(&error, true);
+            return;
+        }
+        let of = |want: bool| {
+            references
+                .iter()
+                .filter(|r| r.action_key == judged.key && r.good == want)
+                .count()
+        };
+        let (goods, bads) = (of(true), of(false));
+        let learned = match models.iter().find(|model| model.action_key == judged.key) {
+            Some(model) => tf(
+                "eval.learned",
+                &[&format!("{:.0}", model.loo_accuracy.unwrap_or(0.0) * 100.0)],
+            ),
+            None => tf(
+                "eval.needMore",
+                &[&4usize.saturating_sub(goods), &4usize.saturating_sub(bads)],
+            ),
+        };
+        self.notify(
+            &format!(
+                "{} · {learned}",
+                tf("eval.referenceSaved", &[&goods, &bads])
+            ),
+            false,
+        );
+    }
+
+    /// The profile in use tuned to the references of the register in hand's
+    /// action: each threshold moved to where the good examples pass and the
+    /// bad ones fail.
+    pub fn eval_tune(&mut self) {
+        use concat_vision::football::{eval::Profile, learn};
+        let library = self.eval_library();
+        let Some(key) = self
+            .tag_in_hand()
+            .and_then(|play| Self::eval_kind_of(&library, &play.tag))
+            .map(|(key, _, _)| key)
+        else {
+            self.notify(&t("eval.notAnAction"), true);
+            return;
+        };
+        let Some(mut profile) = self.eval_profile_in_use(&library) else {
+            return;
+        };
+        let current = profile.rules.get(&key).cloned().unwrap_or_default();
+        let suggestions = learn::suggest(&key, &library.references, &current);
+        if suggestions.is_empty() {
+            self.notify(&t("eval.tuneNeedsMore"), true);
+            return;
+        }
+        learn::apply_suggestions(&mut profile, &key, &suggestions);
+        let mut profiles = library.profiles.clone();
+        let index = self.eval_profile.min(profiles.len().saturating_sub(1));
+        if let Some(slot) = profiles.get_mut(index) {
+            *slot = profile;
+        }
+        if let Err(error) = Profile::save_all(&self.eval_dir(), &profiles) {
+            self.notify(&error, true);
+            return;
+        }
+        let summary: Vec<String> = suggestions.iter().map(|s| s.rationale.clone()).collect();
+        self.notify(
+            &tf("eval.tuned", &[&summary.len(), &summary.join(" · ")]),
+            false,
+        );
+    }
+
+    /// The game-model profile picked.
+    pub fn eval_profile_pick(&mut self, index: i32) {
+        if let Ok(index) = usize::try_from(index) {
+            self.eval_profile = index;
+        }
+    }
+
+    /// The team picked, by its kit.
+    pub fn eval_team_pick(&mut self, team: i32) {
+        if let Ok(team @ 1..=2) = u8::try_from(team) {
+            self.eval_team = team;
+        }
+    }
+
+    /// The library's folder shown, with the profiles and the own actions
+    /// written out first so there is a file to edit: thresholds, weights,
+    /// which rules are major, and new actions with their triggers.
+    pub fn eval_open_library(&mut self) {
+        use concat_vision::football::{eval::Profile, learn};
+        let dir = self.eval_dir();
+        let library = self.eval_library();
+        if !dir.join("profiles.json").exists()
+            && let Err(error) = Profile::save_all(&dir, &library.profiles)
+        {
+            self.notify(&error, true);
+            return;
+        }
+        if !dir.join("actions.json").exists() {
+            // An example to copy from: a coach's action, judged on its own
+            // generic KPIs.
+            let example = vec![learn::ActionDef {
+                key: "cierre_banda".into(),
+                name: "Cierre de banda".into(),
+                trigger: learn::Trigger::BallLost,
+                window_s: 5.0,
+                kpis: vec!["pressers_10m".into(), "nearest_ball".into(), "width".into()],
+            }];
+            if let Err(error) = learn::save_actions(&dir, &example) {
+                self.notify(&error, true);
+                return;
+            }
+        }
+        if let Err(error) = crate::platform::reveal(&dir.join("profiles.json").to_string_lossy()) {
+            self.notify(&error, true);
+        }
+    }
+
+    /// The evaluation's part of the tagging pane.
+    fn publish_evaluation(&self, editor: &Editor<'_>, models: &Models) {
+        use concat_vision::football::eval::Verdict;
+        let library = self.eval_library();
+        sync(
+            &models.eval_profiles,
+            library
+                .profiles
+                .iter()
+                .map(|profile| SharedString::from(profile.name.as_str()))
+                .collect(),
+        );
+        editor.set_eval_profile(
+            self.eval_profile
+                .min(library.profiles.len().saturating_sub(1)) as i32,
+        );
+        editor.set_eval_team(i32::from(self.eval_team));
+        let Some(judged) = self.tag_in_hand().and_then(|play| self.eval_play(&play)) else {
+            editor.set_eval_kind(0);
+            sync(&models.eval_reasons, Vec::new());
+            return;
+        };
+        editor.set_eval_kind(match judged.judgement.verdict {
+            Verdict::Good => 1,
+            Verdict::Improvable => 2,
+            Verdict::Bad => 3,
+            Verdict::Unknown => 4,
+        });
+        editor.set_eval_verdict(judged.judgement.verdict.label().into());
+        let of = |want: bool| {
+            library
+                .references
+                .iter()
+                .filter(|r| r.action_key == judged.key && r.good == want)
+                .count()
+        };
+        editor.set_eval_refs(tf("eval.refs", &[&of(true), &of(false)]).into());
+        sync(
+            &models.eval_reasons,
+            judged
+                .judgement
+                .reasons
+                .iter()
+                .map(|reason| SharedString::from(reason.as_str()))
+                .collect(),
+        );
     }
 
     // ── montage ──
@@ -7527,7 +8277,13 @@ impl Studio {
                 .map(|clip| clip.id.clone())
                 .collect();
             if !ids.is_empty() {
-                self.apply_in(Some(gesture), Command::SplitClips { clip_ids: ids, time: cut });
+                self.apply_in(
+                    Some(gesture),
+                    Command::SplitClips {
+                        clip_ids: ids,
+                        time: cut,
+                    },
+                );
             }
         }
         let inside: Vec<String> = self
@@ -7645,7 +8401,10 @@ impl Studio {
         self.notify(
             &tf(
                 "montage.playAdded",
-                &[&Self::play_tag_name(tag), &Self::montage_clock(start as f32)],
+                &[
+                    &Self::play_tag_name(tag),
+                    &Self::montage_clock(start as f32),
+                ],
             ),
             false,
         );
@@ -7725,7 +8484,12 @@ impl Studio {
         while self.timeline().tracks.len() < source.tracks.len() {
             self.apply_in(Some(gesture), Command::AddTrack { bottom: false });
         }
-        let lanes: Vec<String> = self.timeline().tracks.iter().map(|track| track.id.clone()).collect();
+        let lanes: Vec<String> = self
+            .timeline()
+            .tracks
+            .iter()
+            .map(|track| track.id.clone())
+            .collect();
         let edge = f64::from(MIN_DURATION);
         let mut cursor = 0.0;
         for play in &plays {
@@ -7738,7 +8502,10 @@ impl Studio {
                 .collect();
             pieces.sort_by(|a, b| a.start.total_cmp(&b.start));
             for clip in pieces {
-                let Some(row) = source.tracks.iter().position(|track| track.id == clip.track_id)
+                let Some(row) = source
+                    .tracks
+                    .iter()
+                    .position(|track| track.id == clip.track_id)
                 else {
                     continue;
                 };
@@ -7890,8 +8657,8 @@ impl Studio {
 
     /// The Montage menu: the cutting keys, the marks, and the plays.
     fn montage_menu(&self) -> Vec<MenuItemData> {
-        let row = |id: &str, label: String, glyph: Glyph, shortcut: &str, enabled: bool| {
-            MenuItemData {
+        let row =
+            |id: &str, label: String, glyph: Glyph, shortcut: &str, enabled: bool| MenuItemData {
                 id: id.into(),
                 label: label.into(),
                 kind: MenuRow::Action,
@@ -7901,8 +8668,7 @@ impl Studio {
                 danger: false,
                 checkable: false,
                 checked: false,
-            }
-        };
+            };
         let rule = || MenuItemData {
             kind: MenuRow::Separator,
             ..Default::default()
@@ -7911,12 +8677,30 @@ impl Studio {
         let marked = self.marked().is_some();
         let plays = self.plays_in_order();
         let mut rows = vec![
-            row("delete-left", t("montage.deleteLeft"), Glyph::Razor, "Q", under),
-            row("delete-right", t("montage.deleteRight"), Glyph::Razor, "W", under),
+            row(
+                "delete-left",
+                t("montage.deleteLeft"),
+                Glyph::Razor,
+                "Q",
+                under,
+            ),
+            row(
+                "delete-right",
+                t("montage.deleteRight"),
+                Glyph::Razor,
+                "W",
+                under,
+            ),
             rule(),
             row("mark-in", t("montage.markIn"), Glyph::None, "I", true),
             row("mark-out", t("montage.markOut"), Glyph::None, "O", true),
-            row("clear-marks", t("montage.clearMarks"), Glyph::None, "X", marked),
+            row(
+                "clear-marks",
+                t("montage.clearMarks"),
+                Glyph::None,
+                "X",
+                marked,
+            ),
             row("extract", t("montage.extract"), Glyph::Trash, "E", marked),
             row("lift", t("montage.lift"), Glyph::Trash, "R", marked),
             rule(),
@@ -7931,8 +8715,20 @@ impl Studio {
             ));
         }
         rows.push(rule());
-        rows.push(row("play-prev", t("montage.prevPlay"), Glyph::SkipBack, "[", !plays.is_empty()));
-        rows.push(row("play-next", t("montage.nextPlay"), Glyph::SkipForward, "]", !plays.is_empty()));
+        rows.push(row(
+            "play-prev",
+            t("montage.prevPlay"),
+            Glyph::SkipBack,
+            "[",
+            !plays.is_empty(),
+        ));
+        rows.push(row(
+            "play-next",
+            t("montage.nextPlay"),
+            Glyph::SkipForward,
+            "]",
+            !plays.is_empty(),
+        ));
         let at = f64::from(self.playhead);
         rows.push(row(
             "play-remove",
@@ -7954,7 +8750,10 @@ impl Studio {
             if count > 0 {
                 rows.push(row(
                     &format!("highlights:{tag}"),
-                    tf("montage.buildHighlightsOf", &[&Self::play_tag_name(tag), &count]),
+                    tf(
+                        "montage.buildHighlightsOf",
+                        &[&Self::play_tag_name(tag), &count],
+                    ),
                     Glyph::None,
                     "",
                     true,
@@ -8050,20 +8849,25 @@ impl Studio {
                         studio.request_preview();
                     });
                 };
-                footballs.analyse(&request, focus, &mut |progress| {
-                    let now = match progress {
-                        concat_host::cutout::Progress::Fetching { .. } => 0.0,
-                        concat_host::cutout::Progress::Analysing(fraction) => fraction,
-                    };
-                    if now - last >= 0.01 {
-                        last = now;
-                        on_ui_in_project(epoch, move |studio, _, _| {
-                            if let Some(job) = studio.football_job.as_mut() {
-                                job.2 = now;
-                            }
-                        });
-                    }
-                }, &mut on_window)
+                footballs.analyse(
+                    &request,
+                    focus,
+                    &mut |progress| {
+                        let now = match progress {
+                            concat_host::cutout::Progress::Fetching { .. } => 0.0,
+                            concat_host::cutout::Progress::Analysing(fraction) => fraction,
+                        };
+                        if now - last >= 0.01 {
+                            last = now;
+                            on_ui_in_project(epoch, move |studio, _, _| {
+                                if let Some(job) = studio.football_job.as_mut() {
+                                    job.2 = now;
+                                }
+                            });
+                        }
+                    },
+                    &mut on_window,
+                )
             },
             |studio, _, _, result| {
                 studio.football_job = None;
@@ -8115,7 +8919,11 @@ impl Studio {
         let Some(clip) = self.clip(&id).cloned() else {
             return false;
         };
-        if !self.stage_clips().into_iter().any(|shown| shown.id == clip.id) {
+        if !self
+            .stage_clips()
+            .into_iter()
+            .any(|shown| shown.id == clip.id)
+        {
             return false;
         }
         let Some(request) = self.football_request(&id) else {
@@ -8188,7 +8996,11 @@ impl Studio {
         if !source.kind.is_visual() || self.locked(&source.track_id) {
             return;
         }
-        let gesture = if moving { "football-move" } else { "football-copy" };
+        let gesture = if moving {
+            "football-move"
+        } else {
+            "football-copy"
+        };
         let Some(lane) = self.apply_in(Some(gesture), Command::AddTrack { bottom: false }) else {
             return;
         };
@@ -8237,7 +9049,14 @@ impl Studio {
     /// The colours a mark can wear, as the inspector's swatches show them:
     /// the accent, then a red, a blue, a yellow, white and an orange - two
     /// teams' worth of kit and something for the ball.
-    const MARK_COLOURS: [[u8; 3]; 6] = [[0xcb, 0xf5, 0x3f], [0xe7, 0x4c, 0x3c], [0x3f, 0xa9, 0xf5], [0xf5, 0xd6, 0x3f], [0xff, 0xff, 0xff], [0xff, 0x8c, 0x1a]];
+    const MARK_COLOURS: [[u8; 3]; 6] = [
+        [0xcb, 0xf5, 0x3f],
+        [0xe7, 0x4c, 0x3c],
+        [0x3f, 0xa9, 0xf5],
+        [0xf5, 0xd6, 0x3f],
+        [0xff, 0xff, 0xff],
+        [0xff, 0x8c, 0x1a],
+    ];
 
     /// The chosen player's marks on the selected clip in the palette's
     /// colour `index`, as one undo step.
@@ -8300,7 +9119,10 @@ impl Studio {
             return;
         }
         let gesture = format!("football-knob-{which}");
-        self.apply_in(Some(&gesture), Command::SetClipFootball { clip_id: id, marks });
+        self.apply_in(
+            Some(&gesture),
+            Command::SetClipFootball { clip_id: id, marks },
+        );
     }
 
     /// Takes every football mark off the selected clip.
@@ -8363,7 +9185,8 @@ impl Studio {
                     && concat_vision::football::silhouettes(&dir, *track).is_empty()
             });
             if let Some(track) = wanted {
-                self.football_tried.insert((request.media_path.clone(), track));
+                self.football_tried
+                    .insert((request.media_path.clone(), track));
                 self.football_silhouettes(id, track);
                 return;
             }
@@ -11852,10 +12675,12 @@ impl Studio {
                 .map_or(0, |(_, anchors, _)| anchors.len() as i32),
             football_arrow: self.football_marked(clip, model::MarkStyle::Arrow),
             football_frame: self.football_marked(clip, model::MarkStyle::Frame),
-            football_marks_here: self
-                .football_chosen
-                .map_or(0, |track| clip.football.iter().filter(|mark| mark.track == track).count())
-                as i32,
+            football_marks_here: self.football_chosen.map_or(0, |track| {
+                clip.football
+                    .iter()
+                    .filter(|mark| mark.track == track)
+                    .count()
+            }) as i32,
             football_size: self.football_knob(clip, |mark| mark.size),
             football_thickness: self.football_knob(clip, |mark| mark.thickness),
             football_squash: self.football_knob(clip, |mark| mark.squash),
@@ -13119,11 +13944,9 @@ impl Studio {
                 self.menu_target = None;
             }
             // Q W I O X E R P [ ]: the Montage menu's keys.
-            "delete-left" | "delete-right" | "mark-in" | "mark-out" | "clear-marks"
-            | "extract" | "lift" | "play-add" | "play-prev" | "play-next" | "pointer-tool"
-            | "back-five" | "forward-five" => {
-                self.montage_action(action)
-            }
+            "delete-left" | "delete-right" | "mark-in" | "mark-out" | "clear-marks" | "extract"
+            | "lift" | "play-add" | "play-prev" | "play-next" | "pointer-tool" | "back-five"
+            | "forward-five" => self.montage_action(action),
             _ => {}
         }
     }
@@ -13517,4 +14340,28 @@ mod tests {
         assert_eq!(place_in(&after, 2.5), 0.25);
         assert_eq!(place_in(&after, 12.0), 1.0, "held to the end");
     }
+}
+
+/// The coach's library: game-model profiles, reference examples, the
+/// models learned from them, and the coach's own actions.
+#[derive(Default)]
+pub struct EvalLibrary {
+    /// The game-model profiles.
+    pub profiles: Vec<concat_vision::football::eval::Profile>,
+    /// The examples marked good or bad.
+    pub references: Vec<concat_vision::football::eval::Reference>,
+    /// The models learned from the examples, one per action.
+    pub models: Vec<concat_vision::football::learn::Model>,
+    /// The coach's own actions.
+    pub actions: Vec<concat_vision::football::learn::ActionDef>,
+}
+
+/// One window judged: its action's key, what was measured, and the verdict.
+pub struct Judged {
+    /// The action's key.
+    pub key: String,
+    /// What was measured.
+    pub measures: concat_vision::football::eval::Measures,
+    /// The verdict and its reasons.
+    pub judgement: concat_vision::football::eval::Judgement,
 }
