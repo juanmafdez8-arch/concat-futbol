@@ -103,10 +103,7 @@ pub fn link(frames: &[(u64, Vec<Detection>)], step_ms: u64) -> Vec<Sample> {
             let (nx, ny) = centre(&detection.bbox);
             let steps = (track.unseen + 1) as f32;
             // The player's own motion, the camera's taken out, smoothed.
-            let own = [
-                (nx - ox - camera[0]) / steps,
-                (ny - oy - camera[1]) / steps,
-            ];
+            let own = [(nx - ox - camera[0]) / steps, (ny - oy - camera[1]) / steps];
             track.velocity = [
                 track.velocity[0] * 0.6 + own[0] * 0.4,
                 track.velocity[1] * 0.6 + own[1] * 0.4,
@@ -162,10 +159,7 @@ pub fn link(frames: &[(u64, Vec<Detection>)], step_ms: u64) -> Vec<Sample> {
         }
 
         // The ball: nearest where it was, or the surest when lost.
-        let balls: Vec<&Detection> = detections
-            .iter()
-            .filter(|d| d.kind == Kind::Ball)
-            .collect();
+        let balls: Vec<&Detection> = detections.iter().filter(|d| d.kind == Kind::Ball).collect();
         let chosen = match ball {
             Some((last, unseen)) if unseen < LOST_AFTER => {
                 let (lx, ly) = centre(&last);
@@ -436,9 +430,8 @@ mod tests {
 
     #[test]
     fn a_short_gap_is_filled_and_a_blip_is_dropped() {
-        let mut frames: Vec<(u64, Vec<Detection>)> = (0..6)
-            .map(|i| (i * 100, vec![player(0.2, 0.8)]))
-            .collect();
+        let mut frames: Vec<(u64, Vec<Detection>)> =
+            (0..6).map(|i| (i * 100, vec![player(0.2, 0.8)])).collect();
         frames[3].1.clear();
         frames[1].1.push(player(0.8, 0.9));
         let samples = link(&frames, 100);
@@ -450,7 +443,12 @@ mod tests {
     fn a_reanalysis_keeps_each_players_id() {
         let frames = |shift: f32| -> Vec<(u64, Vec<Detection>)> {
             (0..6)
-                .map(|i| (i * 100, vec![player(0.1 + shift, 0.8), player(0.6 + shift, 0.8)]))
+                .map(|i| {
+                    (
+                        i * 100,
+                        vec![player(0.1 + shift, 0.8), player(0.6 + shift, 0.8)],
+                    )
+                })
                 .collect()
         };
         let old = link(&frames(0.0), 100);
@@ -478,11 +476,15 @@ mod tests {
     #[test]
     fn a_new_player_gets_an_unused_id() {
         let old = link(
-            &(0..5).map(|i| (i * 100, vec![player(0.1, 0.8)])).collect::<Vec<_>>(),
+            &(0..5)
+                .map(|i| (i * 100, vec![player(0.1, 0.8)]))
+                .collect::<Vec<_>>(),
             100,
         );
         let mut new = link(
-            &(0..5).map(|i| (i * 100, vec![player(0.7, 0.8)])).collect::<Vec<_>>(),
+            &(0..5)
+                .map(|i| (i * 100, vec![player(0.7, 0.8)]))
+                .collect::<Vec<_>>(),
             100,
         );
         keep_ids(&old, &mut new);
@@ -505,6 +507,10 @@ mod tests {
             })
             .collect();
         let samples = link(&frames, 100);
-        assert!(samples.iter().all(|s| s.boxes.len() == 1 && s.boxes[0].id == BALL));
+        assert!(
+            samples
+                .iter()
+                .all(|s| s.boxes.len() == 1 && s.boxes[0].id == BALL)
+        );
     }
 }

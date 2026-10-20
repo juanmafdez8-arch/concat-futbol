@@ -112,7 +112,12 @@ pub fn homography(from: &[(f64, f64)], to: &[(f64, f64)]) -> Option<Matrix> {
 /// `h` applied to a point.
 pub fn apply(h: &Matrix, (x, y): (f64, f64)) -> Option<(f64, f64)> {
     let w = h[6] * x + h[7] * y + h[8];
-    (w.abs() > 1e-12).then(|| ((h[0] * x + h[1] * y + h[2]) / w, (h[3] * x + h[4] * y + h[5]) / w))
+    (w.abs() > 1e-12).then(|| {
+        (
+            (h[0] * x + h[1] * y + h[2]) / w,
+            (h[3] * x + h[4] * y + h[5]) / w,
+        )
+    })
 }
 
 fn normalise(points: &[(f64, f64)]) -> (Vec<(f64, f64)>, Matrix) {
@@ -125,10 +130,17 @@ fn normalise(points: &[(f64, f64)]) -> (Vec<(f64, f64)>, Matrix) {
         .map(|(x, y)| (x - mx).hypot(y - my))
         .sum::<f64>()
         / n;
-    let s = if spread > 1e-12 { 2f64.sqrt() / spread } else { 1.0 };
+    let s = if spread > 1e-12 {
+        2f64.sqrt() / spread
+    } else {
+        1.0
+    };
     let t = [s, 0.0, -s * mx, 0.0, s, -s * my, 0.0, 0.0, 1.0];
     (
-        points.iter().map(|(x, y)| ((x - mx) * s, (y - my) * s)).collect(),
+        points
+            .iter()
+            .map(|(x, y)| ((x - mx) * s, (y - my) * s))
+            .collect(),
         t,
     )
 }
@@ -283,12 +295,12 @@ impl Motion {
 fn step_between(a: &Sample, b: &Sample) -> Step {
     let mut ratios = Vec::new();
     let mut pairs = Vec::new();
-    for first in a.boxes.iter().filter(|t| t.kind.is_person() && t.score > 0.0) {
-        if let Some(second) = b
-            .boxes
-            .iter()
-            .find(|t| t.id == first.id && t.score > 0.0)
-        {
+    for first in a
+        .boxes
+        .iter()
+        .filter(|t| t.kind.is_person() && t.score > 0.0)
+    {
+        if let Some(second) = b.boxes.iter().find(|t| t.id == first.id && t.score > 0.0) {
             let ha = f64::from(first.bbox[3] - first.bbox[1]);
             let hb = f64::from(second.bbox[3] - second.bbox[1]);
             if ha > 1e-4 {
@@ -296,11 +308,18 @@ fn step_between(a: &Sample, b: &Sample) -> Step {
             }
             let (ax, ay) = centre(&first.bbox);
             let (bx, by) = centre(&second.bbox);
-            pairs.push(((f64::from(ax), f64::from(ay)), (f64::from(bx), f64::from(by))));
+            pairs.push((
+                (f64::from(ax), f64::from(ay)),
+                (f64::from(bx), f64::from(by)),
+            ));
         }
     }
     if pairs.len() < 3 {
-        return Step { s: 1.0, dx: 0.0, dy: 0.0 };
+        return Step {
+            s: 1.0,
+            dx: 0.0,
+            dy: 0.0,
+        };
     }
     let s = median(&mut ratios).clamp(0.8, 1.25);
     let mut dxs: Vec<f64> = pairs.iter().map(|((ax, _), (bx, _))| bx - s * ax).collect();
@@ -385,7 +404,11 @@ pub fn teams(colours: &HashMap<u32, Vec<[u8; 3]>>) -> (HashMap<u32, u8>, [[u8; 3
         .map(|(id, seen)| {
             let n = seen.len() as f64;
             let mean = seen.iter().fold([0.0; 3], |acc, c| {
-                [acc[0] + f64::from(c[0]) / n, acc[1] + f64::from(c[1]) / n, acc[2] + f64::from(c[2]) / n]
+                [
+                    acc[0] + f64::from(c[0]) / n,
+                    acc[1] + f64::from(c[1]) / n,
+                    acc[2] + f64::from(c[2]) / n,
+                ]
             });
             (*id, mean)
         })
@@ -428,7 +451,11 @@ pub fn teams(colours: &HashMap<u32, Vec<[u8; 3]>>) -> (HashMap<u32, u8>, [[u8; 3
         }
     }
     for (id, colour) in &tracks {
-        let team = if distance(colour, &c0) <= distance(colour, &c1) { 1 } else { 2 };
+        let team = if distance(colour, &c0) <= distance(colour, &c1) {
+            1
+        } else {
+            2
+        };
         out.insert(*id, team);
     }
     let to_u8 = |c: [f64; 3]| c.map(|v| v.round().clamp(0.0, 255.0) as u8);
@@ -453,7 +480,10 @@ mod tests {
         let h = homography(&from, &to).expect("a homography");
         for (a, b) in from.iter().zip(&to) {
             let p = apply(&h, *a).unwrap();
-            assert!((p.0 - b.0).abs() < 1e-6 && (p.1 - b.1).abs() < 1e-6, "{p:?} {b:?}");
+            assert!(
+                (p.0 - b.0).abs() < 1e-6 && (p.1 - b.1).abs() < 1e-6,
+                "{p:?} {b:?}"
+            );
         }
         // The middle of the far edge is the halfway line's far end.
         let p = apply(&h, (0.5, 0.3)).unwrap();

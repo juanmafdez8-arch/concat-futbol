@@ -1,4 +1,4 @@
-﻿// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Jareer and Concat contributors
 
 //! Tactical drawings rasterised onto a frame: the lines, arrows, curved
@@ -158,7 +158,14 @@ impl Canvas {
 
     /// A thick line from `a` to `b`, dashed along `[from, to)` of the
     /// path's length when `dash` is set: `(on, off)` in pixels.
-    fn segment(&mut self, a: (f32, f32), b: (f32, f32), half: f32, from: f32, dash: Option<(f32, f32)>) {
+    fn segment(
+        &mut self,
+        a: (f32, f32),
+        b: (f32, f32),
+        half: f32,
+        from: f32,
+        dash: Option<(f32, f32)>,
+    ) {
         let (dx, dy) = (b.0 - a.0, b.1 - a.1);
         let length2 = (dx * dx + dy * dy).max(1e-6);
         let length = length2.sqrt();
@@ -252,8 +259,9 @@ impl Canvas {
                 }
                 let at = ((self.y0 as usize + y) * width + self.x0 as usize + x) * BYTES_PER_PIXEL;
                 for c in 0..3 {
-                    pixels[at + c] =
-                        (f32::from(pixels[at + c]) * (1.0 - mix) + f32::from(colour[c]) * mix + 0.5) as u8;
+                    pixels[at + c] = (f32::from(pixels[at + c]) * (1.0 - mix)
+                        + f32::from(colour[c]) * mix
+                        + 0.5) as u8;
                 }
             }
         }
@@ -372,7 +380,11 @@ mod tests {
     #[test]
     fn a_line_is_drawn_between_its_points_and_nowhere_else() {
         let mut frame = grass();
-        draw(&mut frame, &sketch(Kind::Line, vec![(0.1, 0.5), (0.9, 0.5)]), &Mapping::IDENTITY);
+        draw(
+            &mut frame,
+            &sketch(Kind::Line, vec![(0.1, 0.5), (0.9, 0.5)]),
+            &Mapping::IDENTITY,
+        );
         assert!(red(&frame, 100, 50));
         assert!(!red(&frame, 100, 20));
         assert!(!red(&frame, 5, 50));
@@ -387,7 +399,12 @@ mod tests {
         draw(&mut frame, &arrow, &Mapping::IDENTITY);
         let column = |x: u32| (0..360).filter(|&y| red(&frame, x, y)).count();
         // The head is the last fifteen pixels before the tip at 648.
-        assert!(column(636) > column(300) + 4, "{} {}", column(636), column(300));
+        assert!(
+            column(636) > column(300) + 4,
+            "{} {}",
+            column(636),
+            column(300)
+        );
     }
 
     #[test]
@@ -415,7 +432,10 @@ mod tests {
         let mut frame = grass();
         draw(
             &mut frame,
-            &sketch(Kind::Zone, vec![(0.2, 0.2), (0.8, 0.2), (0.8, 0.8), (0.2, 0.8)]),
+            &sketch(
+                Kind::Zone,
+                vec![(0.2, 0.2), (0.8, 0.2), (0.8, 0.8), (0.2, 0.8)],
+            ),
             &Mapping::IDENTITY,
         );
         let inside = frame.pixel(100, 50).unwrap();
@@ -426,7 +446,11 @@ mod tests {
     #[test]
     fn a_curve_bows_away_from_the_straight_line() {
         let mut frame = grass();
-        draw(&mut frame, &sketch(Kind::Curve, vec![(0.1, 0.5), (0.9, 0.5)]), &Mapping::IDENTITY);
+        draw(
+            &mut frame,
+            &sketch(Kind::Curve, vec![(0.1, 0.5), (0.9, 0.5)]),
+            &Mapping::IDENTITY,
+        );
         assert!(!red(&frame, 100, 50));
         let bowed = (0..100).any(|y| red(&frame, 100, y));
         assert!(bowed);

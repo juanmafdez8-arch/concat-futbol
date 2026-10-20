@@ -136,7 +136,11 @@ impl Detector {
             if !(self.wanted)(kind) {
                 continue;
             }
-            let floor = if kind == Kind::Ball { BALL_SCORE } else { PERSON_SCORE };
+            let floor = if kind == Kind::Ball {
+                BALL_SCORE
+            } else {
+                PERSON_SCORE
+            };
             if best < floor {
                 continue;
             }

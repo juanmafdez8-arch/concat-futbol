@@ -24,6 +24,7 @@
 #[cfg(feature = "infer")]
 pub mod detect;
 pub mod draw;
+pub mod eval;
 pub mod marks;
 pub mod pitch;
 pub mod track;
@@ -188,7 +189,9 @@ impl TrackSet {
 
     /// Track `id` at `seconds`, if it is in view there.
     pub fn track_at(&self, id: u32, seconds: f64) -> Option<TrackedBox> {
-        self.at(seconds).into_iter().find(|tracked| tracked.id == id)
+        self.at(seconds)
+            .into_iter()
+            .find(|tracked| tracked.id == id)
     }
 
     /// The track under a point of the source at `seconds`, as fractions:
@@ -279,10 +282,10 @@ impl TrackSet {
 
 /// The folder a media file's football analysis lives in under `project`.
 pub fn football_dir(project: &Path, media_path: &str) -> PathBuf {
-    project
-        .join("cache")
-        .join("football")
-        .join(format!("{:016x}", crate::store::fnv1a(media_path.as_bytes())))
+    project.join("cache").join("football").join(format!(
+        "{:016x}",
+        crate::store::fnv1a(media_path.as_bytes())
+    ))
 }
 
 /// The tracks file in a football folder.
@@ -352,7 +355,12 @@ pub fn grown(bbox: &[f32; 4], fraction: f32) -> [f32; 4] {
 
 /// Intersection over union of two boxes.
 pub fn iou(a: &[f32; 4], b: &[f32; 4]) -> f32 {
-    let inter = area(&[a[0].max(b[0]), a[1].max(b[1]), a[2].min(b[2]), a[3].min(b[3])]);
+    let inter = area(&[
+        a[0].max(b[0]),
+        a[1].max(b[1]),
+        a[2].min(b[2]),
+        a[3].min(b[3]),
+    ]);
     let union = area(a) + area(b) - inter;
     if union <= 0.0 { 0.0 } else { inter / union }
 }

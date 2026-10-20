@@ -191,7 +191,13 @@ fn each_in(
 
 /// The thing's silhouette tinted `colour`: the shading an analyst draws
 /// over a player to say "this one".
-pub fn shade(frame: &mut Frame, target: &Target<'_>, mapping: &Mapping, colour: [u8; 3], strength: f32) {
+pub fn shade(
+    frame: &mut Frame,
+    target: &Target<'_>,
+    mapping: &Mapping,
+    colour: [u8; 3],
+    strength: f32,
+) {
     let Some(region) = pixel_box(frame, &target.bbox, mapping, 4.0) else {
         return;
     };
@@ -200,7 +206,8 @@ pub fn shade(frame: &mut Frame, target: &Target<'_>, mapping: &Mapping, colour: 
         let mix = target.weight(u, v) * strength;
         if mix > 0.0 {
             for c in 0..3 {
-                pixel[c] = (f32::from(pixel[c]) * (1.0 - mix) + f32::from(colour[c]) * mix + 0.5) as u8;
+                pixel[c] =
+                    (f32::from(pixel[c]) * (1.0 - mix) + f32::from(colour[c]) * mix + 0.5) as u8;
             }
         }
     });
@@ -289,7 +296,8 @@ pub fn ring(
         }
         if mix > 0.0 {
             for c in 0..3 {
-                pixel[c] = (f32::from(pixel[c]) * (1.0 - mix) + f32::from(colour[c]) * mix + 0.5) as u8;
+                pixel[c] =
+                    (f32::from(pixel[c]) * (1.0 - mix) + f32::from(colour[c]) * mix + 0.5) as u8;
             }
         }
     });
@@ -566,7 +574,13 @@ fn pull_push(colour: &[[f32; 3]], known: &[f32], width: usize, height: usize) ->
         .flat_map(|y| (0..width).map(move |x| (x, y)))
         .map(|(x, y)| {
             let i = y * width + x;
-            let up = bilinear_rgb(&coarse, cw, ch, (x as f32 - 0.5) * 0.5, (y as f32 - 0.5) * 0.5);
+            let up = bilinear_rgb(
+                &coarse,
+                cw,
+                ch,
+                (x as f32 - 0.5) * 0.5,
+                (y as f32 - 0.5) * 0.5,
+            );
             let k = known[i];
             std::array::from_fn(|c| colour[i][c] * k + up[c] * (1.0 - k))
         })
@@ -582,7 +596,12 @@ fn bilinear_rgb(plane: &[[f32; 3]], width: usize, height: usize, x: f32, y: f32)
     let (x0, y0) = (x.floor(), y.floor());
     let (fx, fy) = (x - x0, y - y0);
     let (x0, y0) = (x0 as i64, y0 as i64);
-    let (a, b, c, d) = (at(x0, y0), at(x0 + 1, y0), at(x0, y0 + 1), at(x0 + 1, y0 + 1));
+    let (a, b, c, d) = (
+        at(x0, y0),
+        at(x0 + 1, y0),
+        at(x0, y0 + 1),
+        at(x0 + 1, y0 + 1),
+    );
     std::array::from_fn(|i| {
         let top = a[i] * (1.0 - fx) + b[i] * fx;
         let bottom = c[i] * (1.0 - fx) + d[i] * fx;
@@ -659,7 +678,13 @@ mod tests {
     #[test]
     fn a_spotlight_darkens_the_far_corner_only() {
         let mut frame = grass_with_player();
-        spotlight(&mut frame, &[(target(), Shape::DEFAULT)], &Mapping::IDENTITY, 1.0, 1.0);
+        spotlight(
+            &mut frame,
+            &[(target(), Shape::DEFAULT)],
+            &Mapping::IDENTITY,
+            1.0,
+            1.0,
+        );
         assert!(frame.pixel(1, 1).unwrap()[1] < 100);
         assert_eq!(frame.pixel(32, 32).unwrap(), [230, 30, 30, 255]);
     }
@@ -677,9 +702,25 @@ mod tests {
         let mut small = grass_with_player();
         let mut big = grass_with_player();
         let shape = Shape::DEFAULT;
-        ring(&mut small, &target(), &Mapping::IDENTITY, 1.0, [0, 0, 255], 1.0, shape);
+        ring(
+            &mut small,
+            &target(),
+            &Mapping::IDENTITY,
+            1.0,
+            [0, 0, 255],
+            1.0,
+            shape,
+        );
         let bigger = Shape { size: 2.0, ..shape };
-        ring(&mut big, &target(), &Mapping::IDENTITY, 1.0, [0, 0, 255], 1.0, bigger);
+        ring(
+            &mut big,
+            &target(),
+            &Mapping::IDENTITY,
+            1.0,
+            [0, 0, 255],
+            1.0,
+            bigger,
+        );
         let blue = |frame: &Frame| {
             (0..64)
                 .filter(|&x| frame.pixel(x, 43).unwrap()[2] > 120)
@@ -691,16 +732,35 @@ mod tests {
     #[test]
     fn an_arrow_points_down_at_the_player() {
         let mut frame = grass_with_player();
-        arrow(&mut frame, &target(), &Mapping::IDENTITY, 1.0, [0, 0, 255], 1.0, Shape::DEFAULT);
+        arrow(
+            &mut frame,
+            &target(),
+            &Mapping::IDENTITY,
+            1.0,
+            [0, 0, 255],
+            1.0,
+            Shape::DEFAULT,
+        );
         // Above the head, in the middle, it is blue; under the feet it is not.
-        assert!(frame.pixel(32, 10).unwrap()[2] > 120, "{:?}", frame.pixel(32, 10));
+        assert!(
+            frame.pixel(32, 10).unwrap()[2] > 120,
+            "{:?}",
+            frame.pixel(32, 10)
+        );
         assert_eq!(frame.pixel(32, 50).unwrap(), [40, 140, 50, 255]);
     }
 
     #[test]
     fn a_frame_rings_the_box_and_leaves_the_middle() {
         let mut frame = grass_with_player();
-        frame_round(&mut frame, &target(), &Mapping::IDENTITY, [0, 0, 255], 1.0, Shape::DEFAULT);
+        frame_round(
+            &mut frame,
+            &target(),
+            &Mapping::IDENTITY,
+            [0, 0, 255],
+            1.0,
+            Shape::DEFAULT,
+        );
         assert_eq!(frame.pixel(32, 32).unwrap(), [230, 30, 30, 255]);
         let blue_edges = (0..64)
             .filter(|&y| frame.pixel(27, y).unwrap()[2] == 255)
