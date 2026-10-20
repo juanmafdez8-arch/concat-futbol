@@ -10,7 +10,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use super::pitch::{self, Calibration, Motion};
-use super::{BALL, Kind, TrackSet};
+use super::{BALL, Kind, Player, Role, TrackSet};
 
 /// A tracked player placed on the pitch, in metres.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -23,6 +23,8 @@ pub struct Placed {
     pub keeper: bool,
     /// Position in pitch metres.
     pub at: (f64, f64),
+    /// Posición registrada.
+    pub role: Option<Role>,
 }
 
 /// One mapped instant of the match.
@@ -38,6 +40,14 @@ pub struct Snapshot {
 
 /// Map tracking samples onto the pitch, omitting instants without calibration.
 pub fn snapshots(set: &TrackSet, calibration: &Calibration) -> Vec<Snapshot> {
+    snapshots_with(set, calibration, &BTreeMap::new())
+}
+/// Map tracking samples and attach registered roles.
+pub fn snapshots_with(
+    set: &TrackSet,
+    calibration: &Calibration,
+    roster: &BTreeMap<u32, Player>,
+) -> Vec<Snapshot> {
     let motion = Motion::of(set);
     set.samples
         .iter()
@@ -56,6 +66,7 @@ pub fn snapshots(set: &TrackSet, calibration: &Calibration) -> Vec<Snapshot> {
                                 team: item.team,
                                 keeper: item.kind == Kind::Goalkeeper,
                                 at,
+                                role: roster.get(&item.id).and_then(|p| p.role),
                             });
                         }
                     }
@@ -298,8 +309,22 @@ pub fn shape(snap: &Snapshot, team: u8, goal: Goal, radius: f64) -> Shape {
     let ys: Vec<f64> = players.iter().map(|p| p.at.1).collect();
     let mut ordered = depths.clone();
     ordered.sort_by(f64::total_cmp);
-    let def = (!ordered.is_empty())
-        .then(|| ordered.iter().take(4).sum::<f64>() / ordered.len().min(4) as f64);
+    // The back line by role when the analyst named enough of it; else the
+    // four nearest the own goal.
+    let role_depths: Vec<f64> = players
+        .iter()
+        .filter(|p| {
+            p.role
+                .is_some_and(|r| matches!(r, Role::Central | Role::Lateral))
+        })
+        .map(|p| depth(goal, p.at.0))
+        .collect();
+    let def = if role_depths.len() >= 3 {
+        Some(mean(&role_depths))
+    } else {
+        (!ordered.is_empty())
+            .then(|| ordered.iter().take(4).sum::<f64>() / ordered.len().min(4) as f64)
+    };
     let mid = (ordered.len() > 4)
         .then(|| ordered.iter().skip(4).take(4).sum::<f64>() / (ordered.len() - 4).min(4) as f64);
     let centroid = (!players.is_empty()).then(|| {
@@ -965,6 +990,10 @@ pub fn kpi_label(key: &str) -> &'static str {
         "progress_m" => "progresión",
         "line_gap" => "distancia entre líneas",
         "shift_follow" => "seguimiento lateral",
+        "outside_box" => "jugadoras fuera de la caja",
+        "interiors_press_wide" => "interiores o laterales presionando fuera",
+        "pivot_central" => "pivote en zona central",
+        "def_line_by_role" => "altura de centrales y laterales",
         _ => "indicador",
     }
 }
@@ -1092,6 +1121,7 @@ fn unit(k: &str) -> &'static str {
     match k {
         "block_length" | "block_length_end" | "nearest_2s" | "width" | "def_line_height"
         | "line_gap" | "progress_m" | "centroid_depth" | "nearest_ball" => "m",
+        "def_line_by_role" => "m",
         "regain_s" | "reorganise_s" => "s",
         _ => "",
     }
@@ -1131,7 +1161,15 @@ pub struct Context {
 impl Context {
     /// Reads a track set through its calibration.
     pub fn new(set: &TrackSet, calibration: &Calibration) -> Context {
-        let snaps = snapshots(set, calibration);
+        Self::with_players(set, calibration, &BTreeMap::new())
+    }
+    /// Reads a track set and attaches player roles.
+    pub fn with_players(
+        set: &TrackSet,
+        calibration: &Calibration,
+        players: &BTreeMap<u32, Player>,
+    ) -> Context {
+        let snaps = snapshots_with(set, calibration, players);
         let possession = possession(&snaps);
         let sides = Sides::of(&snaps);
         Context {
@@ -1218,6 +1256,7 @@ mod tests {
                         id: n,
                         team: 1,
                         keeper: false,
+                        role: None,
                         at: (
                             if n < 4 { bx + 0.5 } else { 15.0 + n as f64 },
                             20.0 + n as f64 * 2.0,
@@ -1228,6 +1267,7 @@ mod tests {
                     id: n,
                     team: 2,
                     keeper: false,
+                    role: None,
                     at: (70.0 + n as f64 * 0.2, 20.0 + n as f64),
                 }));
                 Snapshot {
@@ -1350,12 +1390,14 @@ mod tests {
                             id: n,
                             team: 1,
                             keeper: false,
+                            role: None,
                             at: (40.0 + n as f64, y + n as f64 * 0.1),
                         })
                         .chain((10..20).map(|n| Placed {
                             id: n,
                             team: 2,
                             keeper: false,
+                            role: None,
                             at: (70.0, y),
                         }))
                         .collect(),
@@ -1373,6 +1415,7 @@ mod tests {
                 id: u32::from(team) * 100 + n as u32,
                 team,
                 keeper: false,
+                role: None,
                 at: (*x, 10.0 + n as f64 * 5.0),
             })
             .collect()

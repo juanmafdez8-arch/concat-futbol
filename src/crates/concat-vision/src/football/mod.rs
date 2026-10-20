@@ -28,6 +28,7 @@ pub mod eval;
 pub mod learn;
 pub mod marks;
 pub mod pitch;
+pub mod report;
 pub mod track;
 
 use std::collections::HashMap;
@@ -35,6 +36,126 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
+
+/// Posición habitual de una jugadora.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    /// Goalkeeper.
+    Portera,
+    /// Centre back.
+    Central,
+    /// Full back.
+    Lateral,
+    /// Holding midfielder.
+    Pivote,
+    /// Central midfielder.
+    Interior,
+    /// Attacking midfielder.
+    Mediapunta,
+    /// Winger.
+    Extremo,
+    /// Striker.
+    Delantera,
+}
+impl Role {
+    /// Todas las posiciones.
+    pub const ALL: [Role; 8] = [
+        Self::Portera,
+        Self::Central,
+        Self::Lateral,
+        Self::Pivote,
+        Self::Interior,
+        Self::Mediapunta,
+        Self::Extremo,
+        Self::Delantera,
+    ];
+    /// Nombre en español.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Portera => "Portera",
+            Self::Central => "Central",
+            Self::Lateral => "Lateral",
+            Self::Pivote => "Pivote",
+            Self::Interior => "Interior",
+            Self::Mediapunta => "Mediapunta",
+            Self::Extremo => "Extremo",
+            Self::Delantera => "Delantera",
+        }
+    }
+    /// Busca una posición sin distinguir mayúsculas ni acentos.
+    pub fn from_label(s: &str) -> Option<Role> {
+        let key: String = s
+            .to_lowercase()
+            .chars()
+            .map(|c| match c {
+                'á' | 'à' | 'ä' => 'a',
+                'é' | 'è' | 'ë' => 'e',
+                'í' | 'ì' | 'ï' => 'i',
+                'ó' | 'ò' | 'ö' => 'o',
+                'ú' | 'ù' | 'ü' => 'u',
+                _ => c,
+            })
+            .collect();
+        Self::ALL
+            .into_iter()
+            .find(|r| r.label().to_lowercase() == key)
+    }
+}
+
+/// Jugadora registrada en la plantilla del equipo.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SquadPlayer {
+    /// Dorsal.
+    pub number: u32,
+    /// Nombre.
+    pub name: String,
+    /// Posición habitual.
+    pub role: Option<Role>,
+}
+/// Plantilla guardada junto al análisis.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Squad {
+    /// Jugadoras por dorsal.
+    #[serde(default)]
+    pub players: Vec<SquadPlayer>,
+}
+impl Squad {
+    /// Lee squad.json; una plantilla ausente está vacía.
+    pub fn load(dir: &Path) -> Squad {
+        std::fs::read(dir.join("squad.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default()
+    }
+    /// Guarda squad.json.
+    pub fn save(&self, dir: &Path) -> Result<(), String> {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        let b = serde_json::to_vec_pretty(self).map_err(|e| e.to_string())?;
+        std::fs::write(dir.join("squad.json"), b).map_err(|e| e.to_string())
+    }
+    /// Busca una jugadora por dorsal.
+    pub fn find(&self, number: u32) -> Option<&SquadPlayer> {
+        self.players.iter().find(|p| p.number == number)
+    }
+    /// Añade o completa una jugadora sin borrar datos conocidos.
+    pub fn upsert(&mut self, number: u32, name: &str, role: Option<Role>) {
+        if let Some(p) = self.players.iter_mut().find(|p| p.number == number) {
+            if !name.trim().is_empty() {
+                p.name = name.to_owned()
+            }
+            if role.is_some() {
+                p.role = role
+            }
+        } else {
+            self.players.push(SquadPlayer {
+                number,
+                name: name.to_owned(),
+                role,
+            })
+        }
+    }
+}
 
 use crate::{MASK_RATE, MaskStore};
 
@@ -390,6 +511,9 @@ pub struct Player {
     /// His name, as the analyst wrote it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub name: String,
+    /// Posición en el campo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<Role>,
 }
 
 impl Roster {
@@ -414,9 +538,97 @@ impl Roster {
     pub fn edit(&mut self, id: u32, change: impl FnOnce(&mut Player)) {
         let player = self.players.entry(id).or_default();
         change(player);
-        if player.number.is_none() && player.name.trim().is_empty() {
+        if player.number.is_none() && player.name.trim().is_empty() && player.role.is_none() {
             self.players.remove(&id);
         }
+    }
+    /// Resuelve datos compartidos por dorsal y propaga identidades entre tracks próximos.
+    pub fn effective(&self, set: &TrackSet) -> std::collections::BTreeMap<u32, Player> {
+        let mut out = self.players.clone();
+        let mut by = HashMap::<u32, Player>::new();
+        for p in out.values() {
+            if let Some(n) = p.number {
+                let e = by.entry(n).or_default();
+                if e.name.is_empty() {
+                    e.name = p.name.clone()
+                }
+                if e.role.is_none() {
+                    e.role = p.role
+                }
+            }
+        }
+        for p in out.values_mut() {
+            if let Some(n) = p.number
+                && let Some(e) = by.get(&n)
+            {
+                if p.name.is_empty() {
+                    p.name = e.name.clone()
+                }
+                if p.role.is_none() {
+                    p.role = e.role
+                }
+            }
+        }
+        // Each player track by when it starts: its team, where it starts and
+        // ends, and its entry if the analyst gave it one.
+        let identified =
+            |p: &Player| p.number.is_some() || !p.name.trim().is_empty() || p.role.is_some();
+        struct Span {
+            id: u32,
+            team: u8,
+            first: u64,
+            last: u64,
+            start: (f32, f32),
+            end: (f32, f32),
+        }
+        let mut spans: Vec<Span> = set
+            .tracks()
+            .into_iter()
+            .filter(|(_, kind, _)| *kind == Kind::Player)
+            .filter_map(|(id, _, _)| {
+                let instants = set.instants_of(id);
+                let (first, opening) = instants.first()?;
+                let (last, closing) = instants.last()?;
+                Some(Span {
+                    id,
+                    team: opening.team,
+                    first: *first,
+                    last: *last,
+                    start: opening.centre(),
+                    end: closing.centre(),
+                })
+            })
+            .collect();
+        spans.sort_by_key(|span| (span.first, span.id));
+        // The players whose track has ended and may be picked up again, by
+        // where and when it ended. A player is handed on once: the track that
+        // takes it is where it is next looked for.
+        let mut open: Vec<(u64, u8, (f32, f32), Player)> = Vec::new();
+        for span in spans {
+            let mut player = out.get(&span.id).cloned().filter(identified);
+            if player.is_none() && span.team != 0 {
+                let candidate = open
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (last, team, end, _))| {
+                        *team == span.team
+                            && span.first >= *last
+                            && span.first - *last <= 3000
+                            && (span.start.0 - end.0).hypot(span.start.1 - end.1) <= 0.08
+                    })
+                    .max_by_key(|(_, (last, ..))| *last)
+                    .map(|(index, _)| index);
+                if let Some(index) = candidate {
+                    let (_, _, _, handed) = open.remove(index);
+                    out.insert(span.id, handed.clone());
+                    player = Some(handed);
+                }
+            }
+            if let Some(player) = player {
+                open.push((span.last, span.team, span.end, player));
+            }
+        }
+        out
     }
 }
 
@@ -505,5 +717,66 @@ mod tests {
     fn boxes_measure() {
         assert!((iou(&[0.0, 0.0, 1.0, 1.0], &[0.0, 0.0, 0.5, 1.0]) - 0.5).abs() < 1e-6);
         assert_eq!(iou(&[0.0, 0.0, 0.1, 0.1], &[0.5, 0.5, 0.6, 0.6]), 0.0);
+    }
+
+    fn boxed(id: u32, team: u8, x: f32) -> TrackedBox {
+        TrackedBox {
+            id,
+            kind: Kind::Player,
+            bbox: [x, 0.5, x + 0.02, 0.56],
+            score: 0.9,
+            team,
+        }
+    }
+
+    /// Player 3 is lost at 1 s and picked up as 7 at 2 s beside where she
+    /// was, and as 9 at 4 s; a far track (8) and a late one (11) are not her.
+    fn handed_on() -> TrackSet {
+        let at = |ms: u64, boxes: Vec<TrackedBox>| Sample { ms, boxes };
+        TrackSet {
+            version: 1,
+            model: String::new(),
+            aspect: 16.0 / 9.0,
+            samples: vec![
+                at(0, vec![boxes_one(3)]),
+                at(1000, vec![boxes_one(3)]),
+                at(2000, vec![boxed(7, 1, 0.30), boxed(8, 1, 0.80)]),
+                at(3000, vec![boxed(7, 1, 0.30), boxed(8, 1, 0.80)]),
+                at(4000, vec![boxed(9, 1, 0.31), boxed(8, 1, 0.80)]),
+                at(9000, vec![boxed(11, 1, 0.31)]),
+            ],
+            team_colours: Vec::new(),
+        }
+    }
+
+    fn boxes_one(id: u32) -> TrackedBox {
+        boxed(id, 1, 0.30)
+    }
+
+    #[test]
+    fn a_dorsal_follows_the_player_through_lost_tracks() {
+        let mut roster = Roster::default();
+        roster.edit(3, |p| p.number = Some(8));
+        let effective = roster.effective(&handed_on());
+        assert_eq!(effective.get(&7).and_then(|p| p.number), Some(8));
+        assert_eq!(effective.get(&9).and_then(|p| p.number), Some(8), "a chain");
+        assert!(effective.get(&8).is_none(), "too far");
+        assert!(effective.get(&11).is_none(), "too late");
+    }
+
+    #[test]
+    fn a_shared_number_shares_name_and_role() {
+        let mut roster = Roster::default();
+        roster.edit(3, |p| {
+            p.number = Some(10);
+            p.name = "Alicia".into();
+            p.role = Some(Role::Interior);
+        });
+        roster.edit(8, |p| p.number = Some(10));
+        let effective = roster.effective(&handed_on());
+        assert_eq!(effective[&8].name, "Alicia");
+        assert_eq!(effective[&8].role, Some(Role::Interior));
+        assert_eq!(Role::from_label("interior"), Some(Role::Interior));
+        assert_eq!(Role::from_label("PIVOTE"), Some(Role::Pivote));
     }
 }

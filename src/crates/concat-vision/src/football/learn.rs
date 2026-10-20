@@ -157,6 +157,66 @@ pub fn generic(window: &[Snapshot], team: u8, goal: Goal) -> Measures {
         "regain",
         (!visible.is_empty()).then_some(if regained { 1.0 } else { 0.0 }),
     );
+    put(
+        "outside_box",
+        mean_values(visible.iter().map(|s| {
+            outfield(s, team)
+                .filter(|p| (p.at.1 - 34.0).abs() > 18.0)
+                .count() as f64
+        })),
+    );
+    put(
+        "interiors_press_wide",
+        mean_values(visible.iter().filter_map(|s| {
+            let ball = s.ball?;
+            if (ball.1 - 34.0).abs() <= 17.0 {
+                return None;
+            }
+            let players: Vec<&Placed> = outfield(s, team).collect();
+            if !players.iter().any(|p| p.role.is_some()) {
+                return None;
+            }
+            let nearest = players
+                .iter()
+                .min_by(|a, b| distance(a.at, ball).total_cmp(&distance(b.at, ball)))?;
+            Some(
+                if nearest
+                    .role
+                    .is_some_and(|r| matches!(r, super::Role::Interior | super::Role::Lateral))
+                {
+                    1.0
+                } else {
+                    0.0
+                },
+            )
+        })),
+    );
+    put(
+        "pivot_central",
+        mean_values(visible.iter().filter_map(|s| {
+            let pivots: Vec<&Placed> = outfield(s, team)
+                .filter(|p| p.role == Some(super::Role::Pivote))
+                .collect();
+            (!pivots.is_empty()).then(|| {
+                if pivots.iter().any(|p| (p.at.1 - 34.0).abs() <= 10.0) {
+                    1.0
+                } else {
+                    0.0
+                }
+            })
+        })),
+    );
+    put(
+        "def_line_by_role",
+        mean_values(visible.iter().flat_map(|s| {
+            outfield(s, team)
+                .filter(|p| {
+                    p.role
+                        .is_some_and(|r| matches!(r, super::Role::Central | super::Role::Lateral))
+                })
+                .map(|p| eval::depth(goal, p.at.0))
+        })),
+    );
     out
 }
 
@@ -169,6 +229,10 @@ pub fn generic_label(key: &str) -> &'static str {
         "behind_ball" => "jugadores por detrás del balón",
         "pressers_2s" => "presionando a los 2 s",
         "regain" => "recuperación del balón",
+        "outside_box" => "jugadoras fuera de la caja",
+        "interiors_press_wide" => "interiores o laterales presionando fuera",
+        "pivot_central" => "pivote en zona central",
+        "def_line_by_role" => "altura de centrales y laterales",
         _ => eval::kpi_label(key),
     }
 }
@@ -566,7 +630,7 @@ pub fn suggest(action_key: &str, examples: &[Reference], current: &[Rule]) -> Ve
                 "El {:.0} % de vuestros ejemplos buenos tiene {} {} {}{}; el {:.0} % de los malos queda fuera",
                 gp * 100.0,
                 generic_label(&k),
-                if high { "≥" } else { "≤" },
+                if high { "â‰¥" } else { "â‰¤" },
                 eval::fmt(cut),
                 eval::unit_suffix(&k),
                 bf * 100.0
@@ -578,7 +642,7 @@ pub fn suggest(action_key: &str, examples: &[Reference], current: &[Rule]) -> Ve
                 "El {:.0} % de vuestros ejemplos buenos tiene {} {} {}{}",
                 pass * 100.0,
                 generic_label(&k),
-                if min.is_some() { "≥" } else { "≤" },
+                if min.is_some() { "â‰¥" } else { "â‰¤" },
                 eval::fmt(min.or(max).unwrap_or(0.0)),
                 eval::unit_suffix(&k)
             ) })
@@ -771,6 +835,7 @@ mod tests {
                 id: u32::from(team) * 100 + n as u32,
                 team,
                 keeper: false,
+                role: None,
                 at: (*x, 10.0 + n as f64 * 5.0),
             })
             .collect()
@@ -913,7 +978,7 @@ mod tests {
         assert!((35.0..=40.0).contains(&max), "{max}");
         assert!(block.min.is_none());
         assert!(block.good_pass >= 0.99 && block.bad_fail.expect("bad") >= 0.99);
-        assert!(block.rationale.contains("≤"), "{}", block.rationale);
+        assert!(block.rationale.contains("â‰¤"), "{}", block.rationale);
         let mut profile = Profile::presets().remove(0);
         apply_suggestions(&mut profile, Action::PressAfterLoss.key(), &found);
         let rule = profile.rules[Action::PressAfterLoss.key()]
@@ -953,5 +1018,52 @@ mod tests {
         let back: ActionDef =
             serde_json::from_str(&serde_json::to_string(&def).expect("json")).expect("parse");
         assert_eq!(back, def);
+    }
+
+    fn placed(id: u32, team: u8, at: (f64, f64), role: Option<crate::football::Role>) -> Placed {
+        Placed {
+            id,
+            team,
+            keeper: false,
+            at,
+            role,
+        }
+    }
+
+    #[test]
+    fn the_caja_and_the_roles_are_measured() {
+        use crate::football::Role;
+        // Ten defending players: eight inside the central box, two outside;
+        // the ball wide, an interior nearest it; the pivot central.
+        let mut players = vec![
+            placed(1, 1, (20.0, 26.0), Some(Role::Central)),
+            placed(2, 1, (20.0, 42.0), Some(Role::Central)),
+            placed(3, 1, (22.0, 8.0), Some(Role::Lateral)),
+            placed(4, 1, (22.0, 60.0), Some(Role::Lateral)),
+            placed(5, 1, (30.0, 34.0), Some(Role::Pivote)),
+            placed(6, 1, (35.0, 22.0), Some(Role::Interior)),
+            placed(7, 1, (35.0, 46.0), Some(Role::Interior)),
+            placed(8, 1, (42.0, 34.0), Some(Role::Mediapunta)),
+            placed(9, 1, (48.0, 28.0), Some(Role::Delantera)),
+            placed(10, 1, (48.0, 40.0), Some(Role::Delantera)),
+        ];
+        players.extend((0..10).map(|n| placed(20 + n, 2, (60.0, 10.0 + n as f64 * 5.0), None)));
+        let window: Vec<Snapshot> = (0..6u64)
+            .map(|i| Snapshot {
+                ms: i * 500,
+                players: players.clone(),
+                ball: Some((36.0, 14.0)),
+            })
+            .collect();
+        let m = generic(&window, 1, Goal::Left);
+        assert_eq!(m["outside_box"], Some(2.0), "the two laterals are outside");
+        assert_eq!(
+            m["interiors_press_wide"],
+            Some(1.0),
+            "an interior is nearest the wide ball"
+        );
+        assert_eq!(m["pivot_central"], Some(1.0));
+        let line = m["def_line_by_role"].expect("by role");
+        assert!((line - 21.0).abs() < 1e-9, "{line}");
     }
 }
