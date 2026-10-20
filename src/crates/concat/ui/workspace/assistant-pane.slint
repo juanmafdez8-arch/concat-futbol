@@ -54,6 +54,13 @@ export component AssistantPane inherits Pane {
     property <int> provider: Editor.assistant-provider;
     property <string> model: Editor.assistant-model;
     property <string> key;
+    property <int> lines: Editor.assistant-lines.length;
+    property <bool> busy: Editor.assistant-busy;
+    changed lines => { root.to-bottom(); }
+    changed busy => { root.to-bottom(); }
+    function to-bottom() {
+        chat.content-y = Math.min(0px, chat.visible-height - chat.content-height);
+    }
 
     VerticalLayout {
         // The bar: the switcher, the name, which model answered, and the
@@ -156,8 +163,9 @@ export component AssistantPane inherits Pane {
             }
         }
 
-        // The conversation, newest at the bottom.
-        ScrollView {
+        // The conversation, newest at the bottom, scrolled to it whenever a
+        // line arrives or the assistant starts thinking.
+        chat := ScrollView {
             vertical-stretch: 1;
             VerticalLayout {
                 padding: 12px;

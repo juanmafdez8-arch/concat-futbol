@@ -7578,15 +7578,22 @@ impl Studio {
     // run here against the studio as it is, and its answer handed back.
 
     /// What the assistant is told it is and how to behave.
-    const ASSISTANT_SYSTEM: &'static str = "Eres el asistente de análisis de Concat Fútbol, un editor de vídeo para \
-analistas y entrenadores. Respondes siempre en español, breve y concreto. Para hacer cosas en la app \
-usa las herramientas; nunca inventes datos ni resultados: si necesitas saber algo, llama a `estado`, \
-`listar_jugadas` o `ver_modelo`. Las acciones evaluables son: Presión tras pérdida, Repliegue, \
-Salida de balón, Bloque defensivo / basculación y las que el cuerpo técnico haya creado. Los veredictos \
-son Bien, Mejorable, Mal o Sin datos. Antes de evaluar hacen falta jugadores analizados y el campograma \
-calibrado: si falta, dilo y explica el paso. Cuando el usuario diga que una jugada está bien o mal hecha, \
-márcala como referencia; con suficientes referencias la app aprende su criterio. Si una petición es \
-ambigua, pregunta antes de cambiar nada.";
+    const ASSISTANT_SYSTEM: &'static str = "Eres el asistente de análisis de Concat Fútbol, un editor de vídeo para analistas y entrenadores de fútbol. Respondes siempre en español, breve y concreto.
+
+Actúa directamente: si la petición se entiende, llama a la herramienta sin pedir confirmación. Pregunta solo si falta un dato imprescindible. Nunca inventes datos ni resultados: los sacas de las herramientas.
+
+Qué herramienta usar:
+- «evalúa», «analiza el partido», «cómo lo hicimos» → `evaluar` (antes `configurar` si dicen perfil o equipo).
+- Preguntas por un grupo de jugadas («qué presiones salieron mal», «cuáles salidas de balón fueron bien», «cuántas…») → `listar_jugadas` con `accion` y `veredicto`. Nunca uses `evaluar_jugada` para un grupo.
+- Solo cuando nombran una jugada concreta por su id (p3, p12…): «por qué la p3…», «qué falló en la p3» → `evaluar_jugada` con ese id.
+- «la pN está bien/mal hecha», «guárdala como ejemplo» → `marcar_referencia`.
+- «sube/baja la exigencia», «el bloque no puede medir más de…» → `cambiar_umbral`; las claves de KPI válidas son: block_length (longitud o largo del bloque, lo que «mide» el bloque de delante a atrás, m), width (anchura del equipo de banda a banda, m), def_line_height (altura de la línea defensiva, m), line_gap (distancia entre líneas, m), shift_follow (seguimiento lateral, 0-1), pressers_3s (jugadores presionando a los 3 s), nearest_2s (distancia del más cercano a los 2 s, m), regain_s (segundos en recuperar), behind_ball_5s (jugadores por detrás del balón a los 5 s), reorganise_s (segundos en reorganizarse), support_15m (apoyos a 15 m), superiority_zone (superioridad cerca del balón), progress_m (metros progresados).
+- En `cambiar_umbral` no toques `eliminatoria` salvo que lo pidan expresamente.
+- «crea una acción…» → `crear_accion` con disparador perdida, recuperacion, posesion_rival, salida o manual.
+- «móntame un vídeo/resumen…» → `crear_video`.
+- «qué sabes / qué has aprendido / reglas» → `ver_modelo`. Estado general → `estado`.
+
+Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque defensivo / basculación y las creadas por el cuerpo técnico. Veredictos: Bien, Mejorable, Mal, Sin datos. Para evaluar hacen falta jugadores analizados y el campograma calibrado: si una herramienta dice que falta, explica el paso al usuario.";
 
     /// The tools the assistant may call, with their arguments.
     fn assistant_tools() -> Vec<crate::assistant::Tool> {
@@ -7654,7 +7661,8 @@ ambigua, pregunta antes de cambiar nada.";
                 "cambiar_umbral",
                 "Cambia una regla del modelo de juego en uso: mínimo y/o máximo de un KPI para una acción, y si es eliminatoria.",
                 json!({"type": "object", "properties": {
-                "accion": {"type": "string"}, "kpi": {"type": "string"},
+                "accion": {"type": "string"},
+                "kpi": {"type": "string", "description": "Clave del KPI. block_length = longitud del bloque, lo que mide de la línea más adelantada a la más retrasada (\"el bloque mide X m\"); width = anchura de banda a banda (\"ancho\"); def_line_height = altura de la línea defensiva; line_gap = distancia entre líneas; shift_follow = seguimiento lateral; pressers_3s = jugadores presionando; nearest_2s = distancia del más cercano; regain_s = segundos en recuperar; behind_ball_5s = jugadores por detrás del balón; reorganise_s = segundos en reorganizarse; support_15m = apoyos; superiority_zone = superioridad; progress_m = metros progresados."},
                 "min": {"type": "number"}, "max": {"type": "number"},
                 "eliminatoria": {"type": "boolean"}}, "required": ["accion", "kpi"]}),
             ),
@@ -7691,7 +7699,7 @@ ambigua, pregunta antes de cambiar nada.";
     /// The action an argument names: one of the four by name or key, or one
     /// of the coach's, matched loosely.
     fn assistant_action(library: &EvalLibrary, said: &str) -> Option<(String, String)> {
-        let said = said.trim().to_lowercase();
+        let said = said.trim().to_lowercase().replace('_', " ");
         if said.is_empty() {
             return None;
         }
@@ -7814,7 +7822,7 @@ ambigua, pregunta antes de cambiar nada.";
             }
             "configurar" => {
                 let mut out = Vec::new();
-                let wanted = text("perfil").to_lowercase();
+                let wanted = text("perfil").to_lowercase().replace('_', " ");
                 if !wanted.is_empty() {
                     match library
                         .profiles
@@ -7931,7 +7939,31 @@ ambigua, pregunta antes de cambiar nada.";
                 else {
                     return "No conozco esa acción".into();
                 };
-                let kpi = text("kpi");
+                // A key, or its Spanish name: the model sometimes says one.
+                let said = text("kpi");
+                let kpi = learn::GENERIC_KPIS
+                    .iter()
+                    .chain(
+                        [
+                            "pressers_3s",
+                            "nearest_2s",
+                            "regain_s",
+                            "behind_ball_8s",
+                            "reorganise_s",
+                            "block_length_end",
+                        ]
+                        .iter(),
+                    )
+                    .find(|key| {
+                        **key == said || learn::generic_label(key).eq_ignore_ascii_case(said.trim())
+                    })
+                    .map(|key| key.to_string());
+                let Some(kpi) = kpi else {
+                    return format!(
+                        "No conozco el KPI «{said}». Claves válidas: {}",
+                        learn::GENERIC_KPIS.join(", ")
+                    );
+                };
                 let Some(mut profile) = self.eval_profile_in_use(&library) else {
                     return "No hay modelo de juego".into();
                 };
@@ -8027,19 +8059,27 @@ ambigua, pregunta antes de cambiar nada.";
                 .collect::<Vec<_>>()
                 .join("\n"),
             "crear_accion" => {
-                let name = text("nombre");
-                if name.trim().is_empty() {
-                    return "Falta el nombre".into();
-                }
-                let trigger = match text("disparador").as_str() {
-                    "perdida" => learn::Trigger::BallLost,
-                    "recuperacion" => learn::Trigger::BallWon,
-                    "posesion_rival" => learn::Trigger::RivalPossession { min_s: 4.0 },
-                    "salida" => learn::Trigger::OwnPossessionDeep {
+                // «cierre_de_banda» from a model reads «Cierre de banda».
+                let name = text("nombre").replace('_', " ");
+                let mut letters = name.trim().chars();
+                let name: String = match letters.next() {
+                    Some(first) => first.to_uppercase().chain(letters).collect(),
+                    None => return "Falta el nombre".into(),
+                };
+                let said = text("disparador").to_lowercase();
+                let trigger = if said.contains("perd") {
+                    learn::Trigger::BallLost
+                } else if said.contains("recup") {
+                    learn::Trigger::BallWon
+                } else if said.contains("rival") {
+                    learn::Trigger::RivalPossession { min_s: 4.0 }
+                } else if said.contains("salida") {
+                    learn::Trigger::OwnPossessionDeep {
                         max_depth: 35.0,
                         min_s: 2.0,
-                    },
-                    _ => learn::Trigger::Manual,
+                    }
+                } else {
+                    learn::Trigger::Manual
                 };
                 let key: String = name
                     .to_lowercase()
