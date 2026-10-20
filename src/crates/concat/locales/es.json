@@ -1131,6 +1131,7 @@
   "library.learn": "Aprender",
   "library.timeline": "Biblioteca de referencias",
   "library.empty": "No hay vídeos en {0}: pon clips en las carpetas «Así sí» y «Así no» de cada acción",
+  "library.nothingNew": "No hay vídeos nuevos en la biblioteca: todos están ya en este proyecto",
   "library.probing": "Leyendo {0} vídeos de la biblioteca…",
   "library.imported": "{0} clips en la línea de tiempo «Biblioteca de referencias». Ahora: Analizar todo, y calibra el campo de cada clip",
   "library.importedSome": "{0} clips importados; {1} no se pudieron leer",

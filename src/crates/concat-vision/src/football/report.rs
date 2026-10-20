@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Informe pospartido para el cuerpo técnico.
-use crate::football::eval::{self, Measures, Profile, Verdict};
+use crate::football::eval::{self, Context, Goal, Measures, Profile, Verdict};
 use std::collections::HashMap;
 /// Acción evaluada en una jugada.
 #[derive(Clone, Debug, PartialEq)]
@@ -252,6 +252,18 @@ pub fn to_html(
     thumbs: &HashMap<String, String>,
     names: &HashMap<String, String>,
 ) -> String {
+    to_html_with(title, subtitle, &[], phases, thumbs, names)
+}
+
+/// [`to_html`] with the model's KPI cards under the title.
+pub fn to_html_with(
+    title: &str,
+    subtitle: &str,
+    cards: &[(String, String, String)],
+    phases: &[PhaseReport],
+    thumbs: &HashMap<String, String>,
+    names: &HashMap<String, String>,
+) -> String {
     fn esc(s: &str) -> String {
         s.replace('&', "&amp;")
             .replace('<', "&lt;")
@@ -260,11 +272,23 @@ pub fn to_html(
             .replace('\'', "&#39;")
     }
     let mut h = format!(
-        "<!doctype html><html lang=\"es\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>{}</title><style>body{{margin:0;background:#0f1e33;color:white;font:16px Arial,sans-serif}}main{{max-width:1000px;margin:auto;padding:40px}}section{{min-height:90vh;padding:30px 0;page-break-after:always}}.pill{{background:#24528a;border-radius:20px;padding:8px 16px}}.chips span{{padding:8px;border-radius:8px;margin-right:8px}}.good{{background:#176b50}}.mid{{background:#946d13}}.bad{{background:#8a3540}}.blocks{{display:grid;grid-template-columns:1fr 1fr 1fr;gap:18px}}article{{background:#172b47;padding:18px;border-radius:12px}}img{{max-width:240px}}@media print{{body{{background:white;color:#111}}section{{break-after:page}}}}</style><main><h1>{}</h1><p>{}</p>",
+        "<!doctype html><html lang=\"es\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>{}</title><style>body{{margin:0;background:#0f1e33;color:white;font:16px Arial,sans-serif}}main{{max-width:1000px;margin:auto;padding:40px}}section{{min-height:90vh;padding:30px 0;page-break-after:always}}.pill{{background:#24528a;border-radius:20px;padding:8px 16px}}.chips span{{padding:8px;border-radius:8px;margin-right:8px}}.good{{background:#176b50}}.mid{{background:#946d13}}.bad{{background:#8a3540}}.blocks{{display:grid;grid-template-columns:1fr 1fr 1fr;gap:18px}}article{{background:#172b47;padding:18px;border-radius:12px}}img{{max-width:240px}}.cards{{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin:28px 0 8px}}.card{{background:#172b47;border-radius:12px;padding:20px}}.card b{{display:block;font-size:52px;line-height:1}}.card strong{{display:block;margin-top:14px;font-size:18px}}.card small{{display:block;margin-top:6px;color:#9fb0c8}}figure{{display:inline-block;margin:18px 18px 0 0}}figcaption{{color:#9fb0c8;font-size:13px}}@media print{{body{{background:white;color:#111}}section{{break-after:page}}}}</style><main><h1>{}</h1><p>{}</p>",
         esc(title),
         esc(title),
         esc(subtitle)
     );
+    if !cards.is_empty() {
+        h.push_str("<div class=\"cards\">");
+        for (number, label, note) in cards {
+            h.push_str(&format!(
+                "<div class=\"card\"><b>{}</b><strong>{}</strong><small>{}</small></div>",
+                esc(number),
+                esc(label),
+                esc(note)
+            ));
+        }
+        h.push_str("</div>");
+    }
     for (i, p) in phases.iter().enumerate() {
         h.push_str(&format!("<section><span class=\"pill\">{:02} · {}</span><h1>{}</h1><div class=\"chips\"><span class=\"good\">Bien {}</span><span class=\"mid\">Mejorable {}</span><span class=\"bad\">Mal {}</span></div><div class=\"blocks\"><article><h2>Qué funcionó</h2>{}</article><article><h2>Qué no funcionó</h2>{}</article><article><h2>Por qué pasó</h2>{}</article></div>",i+1,esc(&p.phase.to_uppercase()),esc(&p.phase),p.good,p.improvable,p.bad,bullets(&p.worked),bullets(&p.failed),bullets(&p.why)));
         for id in p.best.iter().chain(&p.worst).take(4) {
@@ -414,6 +438,69 @@ mod tests {
     }
 
     #[test]
+    fn the_model_kpis_count_losses_regains_and_arrivals() {
+        use crate::football::eval::{Placed, Sides, Snapshot, possession};
+        // Team 1 attacks to the right: it holds the ball deep in the rival
+        // box with three players there, loses it, wins it back in 4 s.
+        let snap = |ms: u64, holder: u8, ball: (f64, f64)| {
+            let mut players: Vec<Placed> = (0..10)
+                .map(|n| Placed {
+                    id: n,
+                    team: 1,
+                    keeper: false,
+                    at: (40.0 + n as f64 * 2.0, 20.0 + n as f64 * 3.0),
+                    role: None,
+                })
+                .collect();
+            players.extend((0..10).map(|n| Placed {
+                id: 100 + n,
+                team: 2,
+                keeper: false,
+                at: (70.0 + n as f64, 15.0 + n as f64 * 4.0),
+                role: None,
+            }));
+            // Three of team 1 in the rival box.
+            for (i, p) in players.iter_mut().take(3).enumerate() {
+                p.at = (95.0, 30.0 + i as f64 * 3.0);
+            }
+            let carrier = players
+                .iter_mut()
+                .find(|p| p.team == holder && (holder != 1 || p.at.0 < 90.0))
+                .expect("a carrier");
+            carrier.at = ball;
+            Snapshot {
+                ms,
+                players,
+                ball: Some((ball.0 + 0.5, ball.1)),
+            }
+        };
+        let mut snaps = Vec::new();
+        for i in 0..6u64 {
+            snaps.push(snap(i * 1000, 1, (80.0 + i as f64 * 3.0, 34.0)));
+        }
+        for i in 6..9u64 {
+            snaps.push(snap(i * 1000, 2, (80.0, 40.0)));
+        }
+        for i in 9..14u64 {
+            snaps.push(snap(i * 1000, 1, (60.0, 34.0)));
+        }
+        let ctx = Context {
+            possession: possession(&snaps),
+            sides: Sides::of(&snaps),
+            snaps,
+        };
+        let k = match_kpis(&ctx, 1);
+        assert_eq!(k.losses, 1, "{k:?}");
+        assert_eq!(k.recoveries_6s, 1, "{k:?}");
+        assert!(k.final_third >= 1, "{k:?}");
+        assert!(k.box_arrivals_3 >= 1, "{k:?}");
+        let cards = kpi_cards(&k);
+        assert_eq!(cards.len(), 4);
+        let html = to_html_with("I", "S", &cards, &[], &HashMap::new(), &HashMap::new());
+        assert!(html.contains("Recuperaciones tras pérdida"));
+    }
+
+    #[test]
     fn html_is_escaped_and_has_the_three_blocks() {
         let items = vec![item(
             "press_after_loss",
@@ -437,4 +524,122 @@ mod tests {
             assert!(html.contains(heading), "{heading}");
         }
     }
+}
+
+/// The game model's match KPIs, counted over a whole analysis for one team,
+/// the way the staff's report counts them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MatchKpis {
+    /// Balls the team lost.
+    pub losses: usize,
+    /// Of those, won back within six seconds.
+    pub recoveries_6s: usize,
+    /// Possessions that took the ball into the final third.
+    pub final_third: usize,
+    /// Possessions that reached the rival box with three or more of the
+    /// team's outfield players in it.
+    pub box_arrivals_3: usize,
+    /// Times the rival reached the team's box within fifteen seconds of the
+    /// team losing the ball.
+    pub conceded_after_loss: usize,
+}
+
+/// Whether a point is inside the box at the end `goal` names.
+fn in_box(goal: Goal, (x, y): (f64, f64)) -> bool {
+    eval::depth(goal, x) <= 16.5 && (y - 34.0).abs() <= 20.16
+}
+
+/// Counts the model's KPIs for `team` over the match `ctx` reads.
+pub fn match_kpis(ctx: &Context, team: u8) -> MatchKpis {
+    let mut out = MatchKpis::default();
+    let changes = eval::changes(&ctx.possession);
+    for (index, change) in changes.iter().enumerate() {
+        if change.from != team {
+            continue;
+        }
+        out.losses += 1;
+        if changes[index + 1..]
+            .iter()
+            .take_while(|c| c.ms <= change.ms + 6000)
+            .any(|c| c.to == team)
+        {
+            out.recoveries_6s += 1;
+        }
+        let Some(own) = ctx.sides.goal(team, change.ms) else {
+            continue;
+        };
+        let reached = ctx
+            .snaps
+            .iter()
+            .filter(|s| s.ms > change.ms && s.ms <= change.ms + 15_000)
+            .any(|s| s.ball.is_some_and(|b| in_box(own, b)));
+        if reached {
+            out.conceded_after_loss += 1;
+        }
+    }
+    // The team's possessions, as runs of instants it holds the ball.
+    let mut spell: Option<(bool, bool)> = None;
+    for (snap, (_, holder)) in ctx.snaps.iter().zip(&ctx.possession) {
+        if *holder != Some(team) {
+            if let Some((third, arrival)) = spell.take() {
+                out.final_third += usize::from(third);
+                out.box_arrivals_3 += usize::from(arrival);
+            }
+            continue;
+        }
+        let state = spell.get_or_insert((false, false));
+        let (Some(own), Some(ball)) = (ctx.sides.goal(team, snap.ms), snap.ball) else {
+            continue;
+        };
+        let theirs = if own == Goal::Left {
+            Goal::Right
+        } else {
+            Goal::Left
+        };
+        if eval::depth(own, ball.0) >= 70.0 {
+            state.0 = true;
+        }
+        if in_box(theirs, ball) {
+            let inside = snap
+                .players
+                .iter()
+                .filter(|p| p.team == team && !p.keeper && in_box(theirs, p.at))
+                .count();
+            if inside >= 3 {
+                state.1 = true;
+            }
+        }
+    }
+    if let Some((third, arrival)) = spell {
+        out.final_third += usize::from(third);
+        out.box_arrivals_3 += usize::from(arrival);
+    }
+    out
+}
+
+/// The KPI cards of a report, in the staff's order: the number, what it
+/// counts, and how it reads.
+pub fn kpi_cards(k: &MatchKpis) -> Vec<(String, String, String)> {
+    vec![
+        (
+            k.recoveries_6s.to_string(),
+            "Recuperaciones tras pérdida".into(),
+            format!("en menos de 6 s · de {} pérdidas", k.losses),
+        ),
+        (
+            k.final_third.to_string(),
+            "Progresiones al último tercio".into(),
+            "con balón controlado".into(),
+        ),
+        (
+            k.box_arrivals_3.to_string(),
+            "Llegadas al área".into(),
+            "con 3 o más jugadoras".into(),
+        ),
+        (
+            k.conceded_after_loss.to_string(),
+            "Llegadas rivales a nuestra área".into(),
+            "en 15 s tras pérdida propia".into(),
+        ),
+    ]
 }

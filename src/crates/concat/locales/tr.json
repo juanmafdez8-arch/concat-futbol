@@ -1131,6 +1131,7 @@
   "library.learn": "Learn",
   "library.timeline": "Reference library",
   "library.empty": "No videos in {0}: put clips in each action's \"Así sí\" and \"Así no\" folders",
+  "library.nothingNew": "No new videos in the library: every one is already in this project",
   "library.probing": "Reading {0} library videos…",
   "library.imported": "{0} clips on the \"Reference library\" timeline. Next: Analyse all, and calibrate each clip's pitch",
   "library.importedSome": "{0} clips imported; {1} could not be read",

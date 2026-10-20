@@ -7812,6 +7812,12 @@ impl Studio {
                 stills.push((id.clone(), std::path::PathBuf::from(&media.path), seconds));
             }
         }
+        // The model's KPIs over the footage under the board.
+        let cards = self
+            .board_clip()
+            .and_then(|clip| self.eval_context(&clip.id))
+            .map(|context| report::kpi_cards(&report::match_kpis(&context, self.eval_team)))
+            .unwrap_or_default();
         let title = format!("Informe · {}", self.timeline().name);
         let subtitle = format!("{} · {}", profile.name, Self::report_date());
         let folder = self.report_dir().join(format!(
@@ -7834,7 +7840,8 @@ impl Studio {
                         thumbs.insert(id, file);
                     }
                 }
-                let html = report::to_html(&title, &subtitle, &phases, &thumbs, &names);
+                let html =
+                    report::to_html_with(&title, &subtitle, &cards, &phases, &thumbs, &names);
                 let page = folder.join("informe.html");
                 std::fs::write(&page, html).map_err(|error| error.to_string())?;
                 Ok(page)
@@ -7981,6 +7988,19 @@ impl Studio {
         }
         if found.is_empty() {
             self.notify(&tf("library.empty", &[&root.display()]), true);
+            return;
+        }
+        // What the project already holds is not laid down again: a second
+        // import brings only the clips added since.
+        let held: HashSet<String> = self
+            .project()
+            .media
+            .iter()
+            .map(|m| m.path.to_lowercase())
+            .collect();
+        found.retain(|(_, _, file)| !held.contains(&file.to_string_lossy().to_lowercase()));
+        if found.is_empty() {
+            self.notify(&t("library.nothingNew"), false);
             return;
         }
         // The coach's own actions the library names, kept as actions whose
@@ -9326,9 +9346,22 @@ Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque
                 }
             }
             let (more, less) = if held[1] >= held[2] { (1, 2) } else { (2, 1) };
+            // An action with the ball: the build-up, a coach's action
+            // triggered by winning or holding it, or named as one.
+            let with_ball = key == "build_up"
+                || library.actions.iter().any(|def| {
+                    def.key == key
+                        && (matches!(
+                            def.trigger,
+                            concat_vision::football::learn::Trigger::BallWon
+                                | concat_vision::football::learn::Trigger::OwnPossessionDeep { .. }
+                        ) || ["ofensiv", "ataque", "salida", "posesión", "posesion"]
+                            .iter()
+                            .any(|word| def.name.to_lowercase().contains(word)))
+                });
             if held[1] == held[2] {
                 self.eval_team
-            } else if key == "build_up" {
+            } else if with_ball {
                 more
             } else {
                 less
