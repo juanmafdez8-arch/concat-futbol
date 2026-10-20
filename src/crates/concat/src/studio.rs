@@ -7935,6 +7935,64 @@ impl Studio {
             .find(|name| plain(name) == folder)
     }
 
+    /// The team a library clip's file names: «equipo 1» or «equipo 2», or a
+    /// shirt colour matched to the nearer of the two kits the analysis found.
+    fn library_team_named(&self, clip: &Clip) -> Option<u8> {
+        let media = self
+            .project()
+            .media
+            .iter()
+            .find(|m| m.id == clip.media_id)?;
+        let name = std::path::Path::new(&media.path)
+            .file_stem()?
+            .to_string_lossy()
+            .to_lowercase();
+        if name.contains("equipo 1") || name.contains("equipo1") {
+            return Some(1);
+        }
+        if name.contains("equipo 2") || name.contains("equipo2") {
+            return Some(2);
+        }
+        let colours: [(&str, [f32; 3]); 12] = [
+            ("rojo", [200.0, 40.0, 40.0]),
+            ("roja", [200.0, 40.0, 40.0]),
+            ("granate", [120.0, 30.0, 45.0]),
+            ("azul", [40.0, 70.0, 170.0]),
+            ("celeste", [120.0, 180.0, 230.0]),
+            ("blanco", [235.0, 235.0, 235.0]),
+            ("blanca", [235.0, 235.0, 235.0]),
+            ("negro", [30.0, 30.0, 35.0]),
+            ("amarillo", [230.0, 210.0, 50.0]),
+            ("verde", [40.0, 150.0, 70.0]),
+            ("naranja", [240.0, 130.0, 30.0]),
+            ("morado", [110.0, 50.0, 140.0]),
+        ];
+        let wanted = colours
+            .iter()
+            .find(|(word, _)| {
+                name.split(|c: char| !c.is_alphanumeric())
+                    .any(|w| w == *word)
+            })
+            .map(|(_, rgb)| *rgb)?;
+        let dir = self.football_request(&clip.id)?.dir();
+        let set = concat_vision::football::shared(&dir)?;
+        if set.team_colours.len() < 2 {
+            return None;
+        }
+        let distance = |kit: &[u8; 3]| {
+            (0..3)
+                .map(|i| (f32::from(kit[i]) - wanted[i]).powi(2))
+                .sum::<f32>()
+        };
+        Some(
+            if distance(&set.team_colours[0]) <= distance(&set.team_colours[1]) {
+                1
+            } else {
+                2
+            },
+        )
+    }
+
     /// Import: every video in the library onto a new timeline, end to end,
     /// each under a register of its action marked with its side.
     pub fn library_import(&mut self) {
@@ -9336,6 +9394,10 @@ Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque
                 .any(|d| d == Self::LIBRARY_GOOD || d == Self::LIBRARY_BAD);
             if !library_clip {
                 return self.eval_team;
+            }
+            // The file names the side judged: «… - rojo.mp4», «… equipo 2».
+            if let Some(named) = self.library_team_named(&clip) {
+                return named;
             }
             let mut held = [0usize; 3];
             for (ms, team) in &context.possession {
