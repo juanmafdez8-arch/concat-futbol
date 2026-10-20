@@ -14,6 +14,7 @@ import { KeyframesPane } from "keyframes-pane.slint";
 import { MetersPane } from "meters-pane.slint";
 import { TaggingPane } from "tagging-pane.slint";
 import { PitchPane } from "pitch-pane.slint";
+import { AssistantPane } from "assistant-pane.slint";
 
 // One box of the workspace, showing whichever view its `kind` names.
 //
@@ -348,6 +349,18 @@ export component Seat inherits Rectangle {
     }
 
     if root.kind == PaneKind.pitch: PitchPane {
+            x: 0;
+            y: 0;
+            width: root.width;
+            height: root.height;
+
+            pane-picked(kind) => { root.picked(kind); }
+            pane-seat: root.index;
+            pane-removable: Editor.seats.length > 1;
+            pane-removed => { root.removed(); }
+    }
+
+    if root.kind == PaneKind.assistant: AssistantPane {
             x: 0;
             y: 0;
             width: root.width;

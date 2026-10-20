@@ -293,6 +293,13 @@ export struct TagChipData {
 /// A dot on the pitch board: where, as fractions of the pitch; its colour;
 /// what it is - 0 a player, 1 a keeper, 2 a referee, 3 the ball, 4 a
 /// calibration point; the track's id; whether it is the chosen player.
+/// One line of the assistant's conversation: 0 the coach, 1 the
+/// assistant, 2 a failure.
+export struct AssistantLineData {
+    role: int,
+    text: string,
+}
+
 export struct PitchDotData {
     x: float,
     y: float,

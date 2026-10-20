@@ -14,7 +14,7 @@ import { PaneKind } from "workspace/pane-switcher.slint";
 import { MenuItemData } from "primitives/context-menu.slint";
 import {
     ClipData, ClipField, ClipTextField, DropData, PlayMarkData, SelectedClipData, SelectedTransitionData,
-    PitchDotData, PitchLineData, TagBarData, TagButtonData, TagChipData, TagRowData,
+    AssistantLineData, PitchDotData, PitchLineData, TagBarData, TagButtonData, TagChipData, TagRowData,
     StageGuideData, StageItemData, TimelineTabData, TimelineTool, TrackData,
     TrackSize,
 } from "timeline/model.slint";
@@ -403,6 +403,20 @@ export global Editor {
     callback eval-team-pick(team: int);
     callback eval-open-library();
     callback eval-tune();
+
+    /// The assistant; see Studio's assistant. `assistant-provider`: 0
+    /// automatic, 1 local, 2 Claude.
+    in-out property <[AssistantLineData]> assistant-lines;
+    in-out property <bool> assistant-busy;
+    in-out property <int> assistant-provider;
+    in-out property <string> assistant-model;
+    in-out property <bool> assistant-has-key;
+    in-out property <string> assistant-used;
+    callback assistant-send(text: string);
+    callback assistant-clear();
+    callback assistant-voice();
+    in-out property <bool> assistant-listening;
+    callback assistant-settings(provider: int, model: string, key: string);
     callback tag-import();
     in-out property <[TagBarData]> tag-bars;
 

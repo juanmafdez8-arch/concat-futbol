@@ -1,0 +1,240 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Jareer and Concat contributors
+
+// The assistant: a conversation with a language model that works the
+// analysis - evaluates, lists, jumps to plays, keeps references, tunes the
+// game model, cuts a video - by calling the editor's own tools. The coach
+// writes below and presses Enter; the answers come up the list. The gear
+// opens the settings: which model, the local one's name, a Claude key.
+
+import { ScrollView } from "std-widgets.slint";
+import { I18n } from "../i18n.slint";
+import { Theme } from "../theme/theme.slint";
+import { Button, Field } from "../primitives/modal.slint";
+import { Select } from "../primitives/select.slint";
+import { AssistantLineData } from "../timeline/model.slint";
+import { Editor } from "../editor.slint";
+import { Pane } from "pane.slint";
+import { PaneKind, PaneSwitcher } from "pane-switcher.slint";
+
+// One message across the pane: the coach's in the accent, the assistant's
+// on the field colour, a failure in red; the coach's indented from the left.
+component Bubble inherits Rectangle {
+    in property <AssistantLineData> line;
+    property <length> indent: root.line.role == 0 ? 28px : 0px;
+    height: body.preferred-height + 16px;
+    Rectangle {
+        x: root.indent;
+        width: root.width - root.indent;
+        border-radius: 10px;
+        background: root.line.role == 0 ? Theme.accent.with-alpha(0.18)
+            : root.line.role == 2 ? #e74c3c26 : Theme.field;
+        border-width: 1px;
+        border-color: root.line.role == 0 ? Theme.accent.with-alpha(0.5)
+            : root.line.role == 2 ? #e74c3c80 : Theme.line;
+    }
+    body := Text {
+        x: root.indent + 8px;
+        y: 8px;
+        width: root.width - root.indent - 16px;
+        text: root.line.text;
+        color: Theme.fg;
+        font-size: Theme.fs;
+        wrap: word-wrap;
+    }
+}
+
+export component AssistantPane inherits Pane {
+    in property <int> pane-seat;
+    in property <bool> pane-removable;
+    callback pane-picked(kind: PaneKind);
+    callback pane-removed();
+
+    property <bool> settings;
+    property <int> provider: Editor.assistant-provider;
+    property <string> model: Editor.assistant-model;
+    property <string> key;
+
+    VerticalLayout {
+        // The bar: the switcher, the name, which model answered, and the
+        // two buttons.
+        Rectangle {
+            height: 44px;
+            Rectangle {
+                y: parent.height - 1px;
+                height: 1px;
+                background: Theme.line;
+            }
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 8px;
+                VerticalLayout {
+                    alignment: center;
+                    PaneSwitcher {
+                        kind: PaneKind.assistant;
+                        seat: root.pane-seat;
+                        removable: root.pane-removable;
+                        picked(kind) => { root.pane-picked(kind); }
+                        removed => { root.pane-removed(); }
+                    }
+                }
+                Text {
+                    text: I18n.t("assistant.title");
+                    color: Theme.fg;
+                    font-size: Theme.fs + 1px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: Editor.assistant-used == "claude" ? "Claude" : Editor.assistant-used == "local" ? I18n.t("assistant.local") : "";
+                    color: Theme.fg-muted;
+                    font-size: Theme.fs - 2px;
+                    vertical-alignment: center;
+                }
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Button {
+                        label: I18n.t("assistant.clear");
+                        ghost: true;
+                        enabled: !Editor.assistant-busy;
+                        clicked => { Editor.assistant-clear(); }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Button {
+                        label: I18n.t("assistant.settings");
+                        ghost: !root.settings;
+                        clicked => { root.settings = !root.settings; }
+                    }
+                }
+            }
+        }
+
+        // The settings, when open.
+        if root.settings: VerticalLayout {
+            padding: 12px;
+            spacing: 6px;
+            Select {
+                options: [I18n.t("assistant.auto"), I18n.t("assistant.local"), "Claude"];
+                current: root.provider;
+                changed(index) => { root.provider = index; }
+            }
+            Field {
+                value: root.model;
+                placeholder: "qwen2.5:7b";
+                technical: true;
+                edited(text) => { root.model = text; }
+            }
+            Field {
+                value: "";
+                secret: true;
+                placeholder: Editor.assistant-has-key ? I18n.t("assistant.keySet") : I18n.t("assistant.keyHint");
+                edited(text) => { root.key = text; }
+            }
+            Text {
+                text: I18n.t("assistant.localHint");
+                color: Theme.fg-muted;
+                font-size: Theme.fs - 2px;
+                wrap: word-wrap;
+            }
+            HorizontalLayout {
+                alignment: end;
+                Button {
+                    label: I18n.t("assistant.save");
+                    primary: true;
+                    clicked => {
+                        Editor.assistant-settings(root.provider, root.model, root.key);
+                        root.key = "";
+                        root.settings = false;
+                    }
+                }
+            }
+        }
+
+        // The conversation, newest at the bottom.
+        ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                padding: 12px;
+                spacing: 8px;
+                for line in Editor.assistant-lines: Bubble {
+                    line: line;
+                }
+                if Editor.assistant-busy: Text {
+                    text: I18n.t("assistant.thinking");
+                    color: Theme.fg-muted;
+                    font-size: Theme.fs - 1px;
+                    font-italic: true;
+                }
+            }
+        }
+
+        // What the coach writes; Enter sends it.
+        Rectangle {
+            height: 52px;
+            Rectangle {
+                height: 1px;
+                y: 0;
+                background: Theme.line;
+            }
+            HorizontalLayout {
+                padding: 10px;
+                spacing: 8px;
+                Rectangle {
+                    horizontal-stretch: 1;
+                    border-radius: Theme.r;
+                    background: Theme.field;
+                    border-width: 1px;
+                    border-color: input.has-focus ? Theme.accent : Theme.line;
+                    clip: true;
+                    input := TextInput {
+                        x: 10px;
+                        y: (parent.height - self.height) / 2;
+                        width: parent.width - 20px;
+                        height: self.preferred-height;
+                        single-line: true;
+                        color: Theme.fg;
+                        font-size: Theme.fs;
+                        enabled: !Editor.assistant-busy;
+                        accepted => {
+                            Editor.assistant-send(self.text);
+                            self.text = "";
+                        }
+                    }
+                    if input.text == "" && !input.has-focus: Text {
+                        x: 10px;
+                        y: (parent.height - self.height) / 2;
+                        text: I18n.t("assistant.placeholder");
+                        color: Theme.fg-dim;
+                        font-size: Theme.fs;
+                    }
+                    TouchArea {
+                        mouse-cursor: text;
+                        clicked => { input.focus(); }
+                    }
+                }
+                Button {
+                    label: Editor.assistant-listening ? I18n.t("assistant.stopListening") : I18n.t("assistant.speak");
+                    primary: Editor.assistant-listening;
+                    ghost: !Editor.assistant-listening;
+                    enabled: Editor.assistant-listening || !Editor.assistant-busy;
+                    clicked => { Editor.assistant-voice(); }
+                }
+                Button {
+                    label: I18n.t("assistant.send");
+                    primary: true;
+                    enabled: !Editor.assistant-busy;
+                    clicked => {
+                        Editor.assistant-send(input.text);
+                        input.text = "";
+                    }
+                }
+            }
+        }
+    }
+}

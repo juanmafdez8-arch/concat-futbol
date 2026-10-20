@@ -297,7 +297,12 @@ pub fn analysis_dock() -> Dock {
             columns: true,
             ratio: 0.68,
             first: Dock::leaf(PaneKind::Preview),
-            second: Dock::leaf(PaneKind::Pitch),
+            second: Box::new(Dock::Split {
+                columns: false,
+                ratio: 0.55,
+                first: Dock::leaf(PaneKind::Pitch),
+                second: Dock::leaf(PaneKind::Assistant),
+            }),
         }),
         second: Dock::leaf(PaneKind::Timeline),
     }

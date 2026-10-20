@@ -31,6 +31,7 @@ mod ui {
     slint::include_modules!();
 }
 
+mod assistant;
 mod chips;
 mod dock;
 mod fonts;
@@ -276,6 +277,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
         editor.set_tag_bars(ModelRc::from(models.tag_bars.clone()));
         editor.set_eval_profiles(ModelRc::from(models.eval_profiles.clone()));
         editor.set_eval_reasons(ModelRc::from(models.eval_reasons.clone()));
+        editor.set_assistant_lines(ModelRc::from(models.assistant_lines.clone()));
         editor.set_pitch_dots(ModelRc::from(models.pitch_dots.clone()));
         editor.set_pitch_pairs_shown(ModelRc::from(models.pitch_pairs.clone()));
         editor.set_pitch_lines(ModelRc::from(models.pitch_lines.clone()));
@@ -1347,6 +1349,20 @@ pub fn run() -> Result<(), slint::PlatformError> {
     editor.on_eval_team_pick(on_window!(|state, team: i32| {
         state.eval_team_pick(team);
     }));
+    editor.on_assistant_send(on_window!(|state, text: SharedString| {
+        state.assistant_send(&text);
+    }));
+    editor.on_assistant_voice(on_window!(|state| {
+        state.assistant_voice();
+    }));
+    editor.on_assistant_clear(on_window!(|state| {
+        state.assistant_clear();
+    }));
+    editor.on_assistant_settings(on_window!(
+        |state, provider: i32, model: SharedString, key: SharedString| {
+            state.assistant_settings(provider, &model, &key);
+        }
+    ));
     editor.on_eval_tune(on_window!(|state| {
         state.eval_tune();
     }));

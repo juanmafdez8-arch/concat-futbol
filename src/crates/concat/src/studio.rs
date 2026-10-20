@@ -636,6 +636,8 @@ pub struct Models {
     /// register in hand's verdict.
     pub eval_profiles: Rc<VecModel<SharedString>>,
     pub eval_reasons: Rc<VecModel<SharedString>>,
+    /// The assistant's conversation.
+    pub assistant_lines: Rc<VecModel<AssistantLineData>>,
     /// The pitch board's dots, and a calibration's points on it.
     pub pitch_dots: Rc<VecModel<PitchDotData>>,
     pub pitch_pairs: Rc<VecModel<PitchDotData>>,
@@ -716,6 +718,7 @@ impl Models {
             tag_filter_options: Rc::new(VecModel::default()),
             eval_profiles: Rc::new(VecModel::default()),
             eval_reasons: Rc::new(VecModel::default()),
+            assistant_lines: Rc::new(VecModel::default()),
             tag_bars: Rc::new(VecModel::default()),
             pitch_dots: Rc::new(VecModel::default()),
             pitch_pairs: Rc::new(VecModel::default()),
@@ -1051,6 +1054,20 @@ pub struct Studio {
     eval_profile: usize,
     /// The team the evaluation judges: 1 or 2, as the analysis split kits.
     eval_team: u8,
+    /// The assistant's conversation as shown: 0 the coach, 1 the assistant,
+    /// 2 a failure; and as the model reads it.
+    assistant_lines: Vec<(u8, String)>,
+    assistant_history: Vec<crate::assistant::Turn>,
+    /// A question with the model.
+    assistant_busy: bool,
+    /// Which model answered last: "local" or "claude".
+    assistant_provider_used: String,
+    /// The microphone, while the coach is talking to the assistant.
+    assistant_recorder: Option<concat_host::record::Recorder>,
+    /// What was said, being written out.
+    assistant_hearing: bool,
+    /// The assistant's settings, read once and again after each save.
+    assistant_config: RefCell<Option<crate::assistant::Config>>,
     /// The coach's library, keyed by its files' times.
     #[allow(clippy::type_complexity)]
     eval_library_cache: RefCell<Option<([Option<std::time::SystemTime>; 4], Arc<EvalLibrary>)>>,
@@ -2226,6 +2243,13 @@ impl Studio {
             tag_current: None,
             eval_profile: 0,
             eval_team: 1,
+            assistant_lines: Vec::new(),
+            assistant_history: Vec::new(),
+            assistant_busy: false,
+            assistant_provider_used: String::new(),
+            assistant_recorder: None,
+            assistant_hearing: false,
+            assistant_config: RefCell::new(None),
             eval_library_cache: RefCell::new(None),
             eval_context_cache: RefCell::new(None),
             tag_filter: None,
@@ -7541,6 +7565,748 @@ impl Studio {
         );
         editor.set_tag_rating(in_hand.map_or(0, |play| i32::from(play.rating)));
         self.publish_evaluation(editor, models);
+        self.publish_assistant(editor, models);
+    }
+
+    // ── the assistant ──
+    //
+    // An assistant that works the analysis by being asked, in Spanish, by
+    // text or by voice: a language model - a local one through Ollama, and
+    // Claude when the coach has given a key - that answers with calls to the
+    // tools below, each one a thing the window can already do. The model
+    // runs on a worker thread; each call it makes is handed to this thread,
+    // run here against the studio as it is, and its answer handed back.
+
+    /// What the assistant is told it is and how to behave.
+    const ASSISTANT_SYSTEM: &'static str = "Eres el asistente de análisis de Concat Fútbol, un editor de vídeo para \
+analistas y entrenadores. Respondes siempre en español, breve y concreto. Para hacer cosas en la app \
+usa las herramientas; nunca inventes datos ni resultados: si necesitas saber algo, llama a `estado`, \
+`listar_jugadas` o `ver_modelo`. Las acciones evaluables son: Presión tras pérdida, Repliegue, \
+Salida de balón, Bloque defensivo / basculación y las que el cuerpo técnico haya creado. Los veredictos \
+son Bien, Mejorable, Mal o Sin datos. Antes de evaluar hacen falta jugadores analizados y el campograma \
+calibrado: si falta, dilo y explica el paso. Cuando el usuario diga que una jugada está bien o mal hecha, \
+márcala como referencia; con suficientes referencias la app aprende su criterio. Si una petición es \
+ambigua, pregunta antes de cambiar nada.";
+
+    /// The tools the assistant may call, with their arguments.
+    fn assistant_tools() -> Vec<crate::assistant::Tool> {
+        use serde_json::json;
+        let tool =
+            |name: &str, description: &str, schema: serde_json::Value| crate::assistant::Tool {
+                name: name.to_string(),
+                description: description.to_string(),
+                schema,
+            };
+        let none = json!({"type": "object", "properties": {}});
+        vec![
+            tool(
+                "estado",
+                "Resumen del proyecto: vídeo en el cabezal, si está analizado y calibrado, modelo de juego y equipo evaluados, jugadas por acción y veredicto, referencias y modelos aprendidos.",
+                none.clone(),
+            ),
+            tool(
+                "analizar",
+                "Analiza los jugadores y el balón del vídeo en el cabezal (tarda unos segundos; corre en segundo plano).",
+                none.clone(),
+            ),
+            tool(
+                "configurar",
+                "Elige el modelo de juego (perfil) y/o el equipo evaluado (1 o 2, por el color de camiseta del campograma).",
+                json!({"type": "object", "properties": {
+                "perfil": {"type": "string", "description": "Nombre o parte del nombre del perfil"},
+                "equipo": {"type": "integer", "enum": [1, 2]}}}),
+            ),
+            tool(
+                "evaluar",
+                "Encuentra y evalúa todas las acciones del equipo evaluado en el vídeo; crea una jugada por acción con su veredicto.",
+                none.clone(),
+            ),
+            tool(
+                "listar_jugadas",
+                "Lista las jugadas de la línea de tiempo, filtrando por acción y/o veredicto.",
+                json!({"type": "object", "properties": {
+                "accion": {"type": "string"},
+                "veredicto": {"type": "string", "enum": ["Bien", "Mejorable", "Mal", "Sin datos"]},
+                "max": {"type": "integer"}}}),
+            ),
+            tool(
+                "ir_a_jugada",
+                "Selecciona una jugada y lleva el cabezal a su inicio.",
+                json!({"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}),
+            ),
+            tool(
+                "evaluar_jugada",
+                "Veredicto y motivos (KPIs) de una jugada concreta.",
+                json!({"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}),
+            ),
+            tool(
+                "marcar_referencia",
+                "Guarda una jugada como referencia de cómo sí (buena=true) o cómo no (buena=false) se hace su acción; la IA se reentrena.",
+                json!({"type": "object", "properties": {
+                "id": {"type": "string"}, "buena": {"type": "boolean"}}, "required": ["id", "buena"]}),
+            ),
+            tool(
+                "ajustar_umbrales",
+                "Ajusta los umbrales del modelo de juego de la acción de esa jugada a partir de sus referencias.",
+                json!({"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}),
+            ),
+            tool(
+                "cambiar_umbral",
+                "Cambia una regla del modelo de juego en uso: mínimo y/o máximo de un KPI para una acción, y si es eliminatoria.",
+                json!({"type": "object", "properties": {
+                "accion": {"type": "string"}, "kpi": {"type": "string"},
+                "min": {"type": "number"}, "max": {"type": "number"},
+                "eliminatoria": {"type": "boolean"}}, "required": ["accion", "kpi"]}),
+            ),
+            tool(
+                "ver_modelo",
+                "Reglas del modelo de juego en uso, referencias y lo aprendido por la IA, para una acción o todas.",
+                json!({"type": "object", "properties": {"accion": {"type": "string"}}}),
+            ),
+            tool(
+                "kpis",
+                "Lista los KPIs que se pueden medir y usar en reglas o acciones nuevas.",
+                none.clone(),
+            ),
+            tool(
+                "crear_accion",
+                "Crea una acción nueva del cuerpo técnico, que se detecta y evalúa como las demás.",
+                json!({"type": "object", "properties": {
+                "nombre": {"type": "string"},
+                "disparador": {"type": "string", "enum": ["perdida", "recuperacion", "posesion_rival", "salida", "manual"]},
+                "segundos": {"type": "number", "description": "Duración de la ventana"},
+                "kpis": {"type": "array", "items": {"type": "string"}}}, "required": ["nombre", "disparador"]}),
+            ),
+            tool(
+                "crear_video",
+                "Monta un vídeo (línea de tiempo nueva) con las jugadas filtradas por acción y/o veredicto.",
+                json!({"type": "object", "properties": {
+                "accion": {"type": "string"},
+                "veredicto": {"type": "string", "enum": ["Bien", "Mejorable", "Mal", "Sin datos"]},
+                "nombre": {"type": "string"}}}),
+            ),
+        ]
+    }
+
+    /// The action an argument names: one of the four by name or key, or one
+    /// of the coach's, matched loosely.
+    fn assistant_action(library: &EvalLibrary, said: &str) -> Option<(String, String)> {
+        let said = said.trim().to_lowercase();
+        if said.is_empty() {
+            return None;
+        }
+        Self::EVAL_ACTIONS
+            .iter()
+            .map(|action| (action.key().to_string(), action.name().to_string()))
+            .chain(
+                library
+                    .actions
+                    .iter()
+                    .map(|def| (def.key.clone(), def.name.clone())),
+            )
+            .find(|(key, name)| {
+                let name = name.to_lowercase();
+                *key == said || name == said || name.contains(&said) || said.contains(&name)
+            })
+    }
+
+    /// A timeline second as the coach reads it.
+    fn clock(seconds: f64) -> String {
+        let total = seconds.max(0.0).round() as u64;
+        format!("{}:{:02}", total / 60, total % 60)
+    }
+
+    /// The verdict a register carries, if the evaluation gave it one.
+    fn verdict_of(play: &model::Play) -> Option<&str> {
+        ["Bien", "Mejorable", "Mal", "Sin datos"]
+            .into_iter()
+            .find(|label| play.descriptors.iter().any(|d| d == label))
+    }
+
+    /// One tool call, run against the studio; its answer is text for the
+    /// model to read.
+    pub fn assistant_tool(&mut self, name: &str, input: &serde_json::Value) -> String {
+        use concat_vision::football::{eval::Profile, learn};
+        let text = |key: &str| {
+            input
+                .get(key)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string()
+        };
+        let library = self.eval_library();
+        match name {
+            "estado" => {
+                let clip = self.board_clip();
+                let mut out = Vec::new();
+                match &clip {
+                    Some(clip) => {
+                        out.push(format!("Vídeo: {}", clip.name));
+                        let analysed = self.football_analysed(&clip.id);
+                        out.push(format!(
+                            "Jugadores analizados: {}",
+                            if analysed { "sí" } else { "no" }
+                        ));
+                        let calibrated = analysed && self.eval_context(&clip.id).is_some();
+                        out.push(format!(
+                            "Campograma calibrado: {}",
+                            if calibrated { "sí" } else { "no" }
+                        ));
+                    }
+                    None => out.push("No hay vídeo en el cabezal ni seleccionado".to_string()),
+                }
+                if let Some(profile) = self.eval_profile_in_use(&library) {
+                    out.push(format!("Modelo de juego: {}", profile.name));
+                }
+                out.push(format!(
+                    "Perfiles disponibles: {}",
+                    library
+                        .profiles
+                        .iter()
+                        .map(|p| p.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+                out.push(format!("Equipo evaluado: {}", self.eval_team));
+                let plays = &self.timeline().plays;
+                let mut tally: std::collections::BTreeMap<(String, String), usize> =
+                    Default::default();
+                for play in plays.iter() {
+                    let verdict = Self::verdict_of(play).unwrap_or("sin evaluar").to_string();
+                    *tally.entry((play.tag.clone(), verdict)).or_default() += 1;
+                }
+                out.push(format!("Jugadas: {}", plays.len()));
+                for ((tag, verdict), count) in tally {
+                    out.push(format!("  {tag} · {verdict}: {count}"));
+                }
+                out.push(format!(
+                    "Referencias guardadas: {}",
+                    library.references.len()
+                ));
+                for model in &library.models {
+                    out.push(format!(
+                        "IA aprendida para {}: {} ejemplos, acierto {:.0} %",
+                        model.action_key,
+                        model.n_good + model.n_bad,
+                        model.loo_accuracy.unwrap_or(0.0) * 100.0
+                    ));
+                }
+                if !library.actions.is_empty() {
+                    out.push(format!(
+                        "Acciones propias: {}",
+                        library
+                            .actions
+                            .iter()
+                            .map(|a| a.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
+                out.join("\n")
+            }
+            "analizar" => {
+                let Some(clip) = self.board_clip() else {
+                    return "No hay vídeo en el cabezal".into();
+                };
+                self.selection = vec![clip.id.clone()];
+                self.football_analyse();
+                "Análisis en marcha en segundo plano; tarda unos segundos por cada pocos segundos de vídeo.".into()
+            }
+            "configurar" => {
+                let mut out = Vec::new();
+                let wanted = text("perfil").to_lowercase();
+                if !wanted.is_empty() {
+                    match library
+                        .profiles
+                        .iter()
+                        .position(|p| p.name.to_lowercase().contains(&wanted))
+                    {
+                        Some(index) => {
+                            self.eval_profile = index;
+                            out.push(format!("Modelo de juego: {}", library.profiles[index].name));
+                        }
+                        None => out.push(format!("No hay ningún perfil que se llame «{wanted}»")),
+                    }
+                }
+                if let Some(team) = input
+                    .get("equipo")
+                    .and_then(|v| v.as_i64())
+                    .and_then(|team| i32::try_from(team).ok())
+                {
+                    self.eval_team_pick(team);
+                    out.push(format!("Equipo evaluado: {}", self.eval_team));
+                }
+                if out.is_empty() {
+                    "Nada que cambiar".into()
+                } else {
+                    out.join("\n")
+                }
+            }
+            "evaluar" => {
+                self.eval_run();
+                self.toast.message.to_string()
+            }
+            "listar_jugadas" => {
+                let action =
+                    Self::assistant_action(&library, &text("accion")).map(|(_, name)| name);
+                let verdict = text("veredicto");
+                let max = input.get("max").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
+                let plays: Vec<String> = self
+                    .plays_in_order()
+                    .into_iter()
+                    .filter(|play| action.as_ref().is_none_or(|a| play.tag == *a))
+                    .filter(|play| {
+                        verdict.is_empty() || Self::verdict_of(play) == Some(verdict.as_str())
+                    })
+                    .take(max)
+                    .map(|play| {
+                        format!(
+                            "{} · {} · {}–{} · {}",
+                            play.id,
+                            play.name,
+                            Self::clock(play.start),
+                            Self::clock(play.end),
+                            Self::verdict_of(&play).unwrap_or("sin evaluar")
+                        )
+                    })
+                    .collect();
+                if plays.is_empty() {
+                    "No hay jugadas con ese filtro".into()
+                } else {
+                    plays.join("\n")
+                }
+            }
+            "ir_a_jugada" => {
+                let id = text("id");
+                self.tag_select(&id);
+                match self.tag_in_hand() {
+                    Some(play) if play.id == id => {
+                        format!("En {} ({})", play.name, Self::clock(play.start))
+                    }
+                    _ => format!("No existe la jugada {id}"),
+                }
+            }
+            "evaluar_jugada" => {
+                let id = text("id");
+                self.tag_select(&id);
+                let Some(play) = self.tag_in_hand().filter(|play| play.id == id) else {
+                    return format!("No existe la jugada {id}");
+                };
+                match self.eval_play(&play) {
+                    Some(judged) => {
+                        let measured: Vec<String> = judged
+                            .measures
+                            .iter()
+                            .filter_map(|(k, v)| v.map(|v| format!("{k}={v:.1}")))
+                            .collect();
+                        format!(
+                            "{}: {}\nMotivos: {}\nKPIs: {}",
+                            play.name,
+                            judged.judgement.verdict.label(),
+                            judged.judgement.reasons.join("; "),
+                            measured.join(", ")
+                        )
+                    }
+                    None => "Esa jugada no es evaluable: no es una de las acciones, o el vídeo no está analizado y calibrado".into(),
+                }
+            }
+            "marcar_referencia" => {
+                let id = text("id");
+                self.tag_select(&id);
+                if self.tag_in_hand().is_none_or(|play| play.id != id) {
+                    return format!("No existe la jugada {id}");
+                }
+                let good = input.get("buena").and_then(|v| v.as_bool()).unwrap_or(true);
+                self.eval_reference(good);
+                self.toast.message.to_string()
+            }
+            "ajustar_umbrales" => {
+                let id = text("id");
+                self.tag_select(&id);
+                self.eval_tune();
+                self.toast.message.to_string()
+            }
+            "cambiar_umbral" => {
+                let Some((key, action_name)) = Self::assistant_action(&library, &text("accion"))
+                else {
+                    return "No conozco esa acción".into();
+                };
+                let kpi = text("kpi");
+                let Some(mut profile) = self.eval_profile_in_use(&library) else {
+                    return "No hay modelo de juego".into();
+                };
+                let rules = profile.rules.entry(key).or_default();
+                let rule = match rules.iter().position(|r| r.kpi == kpi) {
+                    Some(index) => &mut rules[index],
+                    None => {
+                        rules.push(concat_vision::football::eval::Rule {
+                            kpi: kpi.clone(),
+                            min: None,
+                            max: None,
+                            weight: 1.0,
+                            major: false,
+                        });
+                        let last = rules.len() - 1;
+                        &mut rules[last]
+                    }
+                };
+                if let Some(min) = input.get("min").and_then(|v| v.as_f64()) {
+                    rule.min = Some(min);
+                }
+                if let Some(max) = input.get("max").and_then(|v| v.as_f64()) {
+                    rule.max = Some(max);
+                }
+                if let Some(major) = input.get("eliminatoria").and_then(|v| v.as_bool()) {
+                    rule.major = major;
+                }
+                let summary = format!(
+                    "{action_name} · {kpi}: mín. {:?}, máx. {:?}, eliminatoria {}",
+                    rule.min, rule.max, rule.major
+                );
+                let mut profiles = library.profiles.clone();
+                let index = self.eval_profile.min(profiles.len().saturating_sub(1));
+                if let Some(slot) = profiles.get_mut(index) {
+                    *slot = profile;
+                }
+                match Profile::save_all(&self.eval_dir(), &profiles) {
+                    Ok(()) => summary,
+                    Err(error) => error,
+                }
+            }
+            "ver_modelo" => {
+                let only = Self::assistant_action(&library, &text("accion")).map(|(key, _)| key);
+                let Some(profile) = self.eval_profile_in_use(&library) else {
+                    return "No hay modelo de juego".into();
+                };
+                let mut out = vec![format!("Modelo de juego: {}", profile.name)];
+                for (key, rules) in &profile.rules {
+                    if only.as_ref().is_some_and(|o| o != key) {
+                        continue;
+                    }
+                    out.push(format!("{key}:"));
+                    for rule in rules {
+                        out.push(format!(
+                            "  {} mín. {:?} máx. {:?} peso {} {}",
+                            rule.kpi,
+                            rule.min,
+                            rule.max,
+                            rule.weight,
+                            if rule.major { "(eliminatoria)" } else { "" }
+                        ));
+                    }
+                    let goods = library
+                        .references
+                        .iter()
+                        .filter(|r| r.action_key == *key && r.good)
+                        .count();
+                    let bads = library
+                        .references
+                        .iter()
+                        .filter(|r| r.action_key == *key && !r.good)
+                        .count();
+                    out.push(format!("  referencias: {goods} así sí, {bads} así no"));
+                    if let Some(model) = library.models.iter().find(|m| m.action_key == *key) {
+                        out.push(format!(
+                            "  IA: acierto {:.0} % con {} ejemplos; pesos {:?}",
+                            model.loo_accuracy.unwrap_or(0.0) * 100.0,
+                            model.n_good + model.n_bad,
+                            model
+                                .kpis
+                                .iter()
+                                .zip(&model.weights)
+                                .map(|(k, w)| format!("{k}:{w:+.2}"))
+                                .collect::<Vec<_>>()
+                        ));
+                    }
+                }
+                out.join("\n")
+            }
+            "kpis" => learn::GENERIC_KPIS
+                .iter()
+                .map(|k| format!("{k}: {}", learn::generic_label(k)))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            "crear_accion" => {
+                let name = text("nombre");
+                if name.trim().is_empty() {
+                    return "Falta el nombre".into();
+                }
+                let trigger = match text("disparador").as_str() {
+                    "perdida" => learn::Trigger::BallLost,
+                    "recuperacion" => learn::Trigger::BallWon,
+                    "posesion_rival" => learn::Trigger::RivalPossession { min_s: 4.0 },
+                    "salida" => learn::Trigger::OwnPossessionDeep {
+                        max_depth: 35.0,
+                        min_s: 2.0,
+                    },
+                    _ => learn::Trigger::Manual,
+                };
+                let key: String = name
+                    .to_lowercase()
+                    .chars()
+                    .map(|c| if c.is_alphanumeric() { c } else { '_' })
+                    .collect();
+                let kpis: Vec<String> = input
+                    .get("kpis")
+                    .and_then(|v| v.as_array())
+                    .map(|list| {
+                        list.iter()
+                            .filter_map(|v| v.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_else(|| learn::GENERIC_KPIS.iter().map(|k| k.to_string()).collect());
+                let mut actions = library.actions.clone();
+                actions.retain(|a| a.key != key);
+                actions.push(learn::ActionDef {
+                    key: key.clone(),
+                    name: name.clone(),
+                    trigger,
+                    window_s: input
+                        .get("segundos")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(6.0),
+                    kpis,
+                });
+                match learn::save_actions(&self.eval_dir(), &actions) {
+                    Ok(()) => format!(
+                        "Acción «{name}» creada (clave {key}). Se detectará al evaluar; márcale referencias para que la IA aprenda."
+                    ),
+                    Err(error) => error,
+                }
+            }
+            "crear_video" => {
+                let action =
+                    Self::assistant_action(&library, &text("accion")).map(|(_, name)| name);
+                let verdict = text("veredicto");
+                let plays: Vec<model::Play> = self
+                    .plays_in_order()
+                    .into_iter()
+                    .filter(|play| action.as_ref().is_none_or(|a| play.tag == *a))
+                    .filter(|play| {
+                        verdict.is_empty() || Self::verdict_of(play) == Some(verdict.as_str())
+                    })
+                    .collect();
+                let count = plays.len();
+                if count == 0 {
+                    return "No hay jugadas con ese filtro".into();
+                }
+                let mut name = text("nombre");
+                if name.is_empty() {
+                    name = [action.clone().unwrap_or_default(), verdict.clone()]
+                        .into_iter()
+                        .filter(|s| !s.is_empty())
+                        .collect::<Vec<_>>()
+                        .join(" · ");
+                    if name.is_empty() {
+                        name = t("tag.presentation");
+                    }
+                }
+                self.build_highlights_from(plays, name.clone());
+                format!("Vídeo «{name}» montado con {count} jugadas en una línea de tiempo nueva")
+            }
+            other => format!("Herramienta desconocida: {other}"),
+        }
+    }
+
+    /// The coach's message: shown at once, and the model asked on a worker.
+    pub fn assistant_send(&mut self, text: &str) {
+        let text = text.trim();
+        if text.is_empty() || self.assistant_busy {
+            return;
+        }
+        self.assistant_lines.push((0, text.to_string()));
+        self.assistant_history.push(crate::assistant::Turn {
+            role: crate::assistant::Role::User,
+            parts: vec![crate::assistant::Part::Text(text.to_string())],
+        });
+        self.assistant_busy = true;
+        let config = self.assistant_config();
+        let mut history = self.assistant_history.clone();
+        std::thread::spawn(move || {
+            let tools = Self::assistant_tools();
+            let mut exec = |name: &str, input: &serde_json::Value| -> String {
+                let (tx, rx) = std::sync::mpsc::channel();
+                let (name, input) = (name.to_string(), input.clone());
+                crate::host::on_ui(move |studio, _, _| {
+                    let _ = tx.send(studio.assistant_tool(&name, &input));
+                });
+                rx.recv_timeout(std::time::Duration::from_secs(120))
+                    .unwrap_or_else(|_| "La app no respondió a tiempo".to_string())
+            };
+            let result = crate::assistant::run(
+                &config,
+                Self::ASSISTANT_SYSTEM,
+                &mut history,
+                &tools,
+                &mut exec,
+                8,
+            );
+            crate::host::on_ui(move |studio, _, _| {
+                studio.assistant_busy = false;
+                match result {
+                    Ok(reply) => {
+                        studio.assistant_history = history;
+                        studio.assistant_provider_used = reply.provider.to_string();
+                        let text = if reply.text.trim().is_empty() {
+                            t("assistant.done")
+                        } else {
+                            reply.text
+                        };
+                        studio.assistant_lines.push((1, text));
+                    }
+                    Err(error) => {
+                        // The question stays unanswered in the history: drop
+                        // it, so the next one is not asked twice.
+                        studio.assistant_history.pop();
+                        studio.assistant_lines.push((2, error));
+                    }
+                }
+            });
+        });
+    }
+
+    /// The microphone: pressed once it listens; pressed again, what was
+    /// said is written out by the transcriber the captions use - a
+    /// multilingual model, so Spanish is heard - and sent as a message.
+    pub fn assistant_voice(&mut self) {
+        if let Some(recorder) = self.assistant_recorder.take() {
+            let take = match recorder.stop() {
+                Ok(take) => take,
+                Err(error) => {
+                    self.notify(&error, true);
+                    return;
+                }
+            };
+            let models = crate::panes::settings::installed(&self.settings.transcribers);
+            let multilingual = |id: &str| !id.ends_with(".en");
+            let chosen = self
+                .prefs
+                .transcriber_model
+                .clone()
+                .filter(|id| multilingual(id) && models.iter().any(|m| m.id == *id))
+                .or_else(|| {
+                    models
+                        .iter()
+                        .map(|m| m.id.clone())
+                        .find(|id| multilingual(id))
+                });
+            let Some(model_id) = chosen else {
+                self.notify(&t("assistant.voiceNeedsModel"), true);
+                return;
+            };
+            let request = concat_speech::transcribe::TranscribeRequest {
+                path: take.path.to_string_lossy().into_owned(),
+                audio_stream: None,
+                source_start: 0.0,
+                window: take.seconds.max(0.2),
+                model_id,
+            };
+            let dirs = self.host.dirs.clone();
+            let transcriber = Arc::clone(&self.host.transcriber);
+            self.assistant_hearing = true;
+            std::thread::spawn(move || {
+                let heard = transcriber.transcribe(&dirs, &request, |_| {});
+                crate::host::on_ui(move |studio, _, _| {
+                    studio.assistant_hearing = false;
+                    match heard {
+                        Ok(segments) => {
+                            let text = segments
+                                .iter()
+                                .map(|segment| segment.text.trim())
+                                .collect::<Vec<_>>()
+                                .join(" ");
+                            if text.trim().is_empty() {
+                                studio.notify(&t("assistant.heardNothing"), true);
+                            } else {
+                                studio.assistant_send(&text);
+                            }
+                        }
+                        Err(error) => studio.notify(&error, true),
+                    }
+                });
+            });
+        } else {
+            if self.assistant_busy || self.assistant_hearing {
+                return;
+            }
+            match concat_host::record::Recorder::start(self.eval_dir().join("voz.wav")) {
+                Ok(recorder) => {
+                    self.assistant_recorder = Some(recorder);
+                    self.notify(&t("assistant.listening"), false);
+                }
+                Err(error) => self.notify(&error, true),
+            }
+        }
+    }
+
+    /// A fresh conversation.
+    pub fn assistant_clear(&mut self) {
+        if !self.assistant_busy {
+            self.assistant_lines.clear();
+            self.assistant_history.clear();
+        }
+    }
+
+    /// The assistant's settings changed: which model, and the Claude key.
+    pub fn assistant_settings(&mut self, provider: i32, model: &str, key: &str) {
+        use crate::assistant::{Config, Provider};
+        let dir = self.eval_dir();
+        let mut config = Config::load(&dir);
+        config.provider = match provider {
+            1 => Provider::Local,
+            2 => Provider::Claude,
+            _ => Provider::Auto,
+        };
+        if !model.trim().is_empty() {
+            config.ollama_model = model.trim().to_string();
+        }
+        if !key.trim().is_empty() {
+            config.claude_key = Some(key.trim().to_string());
+        }
+        *self.assistant_config.borrow_mut() = None;
+        match config.save(&dir) {
+            Ok(()) => self.notify(&t("assistant.saved"), false),
+            Err(error) => self.notify(&error, true),
+        }
+    }
+
+    /// The assistant's settings, from the cache.
+    fn assistant_config(&self) -> crate::assistant::Config {
+        self.assistant_config
+            .borrow_mut()
+            .get_or_insert_with(|| crate::assistant::Config::load(&self.eval_dir()))
+            .clone()
+    }
+
+    /// The assistant's pane.
+    fn publish_assistant(&self, editor: &Editor<'_>, models: &Models) {
+        use crate::assistant::Provider;
+        let mut lines: Vec<AssistantLineData> = self
+            .assistant_lines
+            .iter()
+            .map(|(role, text)| AssistantLineData {
+                role: i32::from(*role),
+                text: text.as_str().into(),
+            })
+            .collect();
+        if lines.is_empty() {
+            lines.push(AssistantLineData {
+                role: 1,
+                text: t("assistant.hello").into(),
+            });
+        }
+        sync(&models.assistant_lines, lines);
+        editor.set_assistant_busy(self.assistant_busy || self.assistant_hearing);
+        editor.set_assistant_listening(self.assistant_recorder.is_some());
+        let config = self.assistant_config();
+        editor.set_assistant_provider(match config.provider {
+            Provider::Auto => 0,
+            Provider::Local => 1,
+            Provider::Claude => 2,
+        });
+        editor.set_assistant_model(config.ollama_model.as_str().into());
+        editor.set_assistant_has_key(config.has_claude());
+        editor.set_assistant_used(self.assistant_provider_used.as_str().into());
     }
 
     // ── evaluation ──
