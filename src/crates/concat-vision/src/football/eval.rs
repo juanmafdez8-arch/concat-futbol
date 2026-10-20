@@ -1521,8 +1521,15 @@ mod tests {
         println!("possession changes: {changes:?}");
         println!("kits: {:?}", set.team_colours);
         for team in [1u8, 2] {
-            let held = context.possession.iter().filter(|(_, t)| *t == Some(team)).count();
-            println!("team {team} holds {held} of {} instants", context.possession.len());
+            let held = context
+                .possession
+                .iter()
+                .filter(|(_, t)| *t == Some(team))
+                .count();
+            println!(
+                "team {team} holds {held} of {} instants",
+                context.possession.len()
+            );
         }
         let profile = &Profile::presets()[0];
         for team in [1u8, 2] {

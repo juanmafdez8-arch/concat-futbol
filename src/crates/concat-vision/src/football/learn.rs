@@ -1066,4 +1066,125 @@ mod tests {
         let line = m["def_line_by_role"].expect("by role");
         assert!((line - 21.0).abs() < 1e-9, "{line}");
     }
+
+    /// The library learned outside the window, the way the window learns
+    /// it: `CONCAT_LEARN_SPEC` names a JSON list of `{dir, key, good,
+    /// colour}` - a clip's analysis folder, its action, its side, and the
+    /// kit colour of the team judged - and `CONCAT_LEARN_LIBRARY` the
+    /// library folder whose references and models are extended.
+    #[test]
+    #[ignore]
+    fn learns_a_library() {
+        use crate::football::eval::{Action, Occurrence};
+        use crate::football::{Roster, TrackSet, pitch::Calibration};
+        let (Ok(spec), Ok(library)) = (
+            std::env::var("CONCAT_LEARN_SPEC"),
+            std::env::var("CONCAT_LEARN_LIBRARY"),
+        ) else {
+            return;
+        };
+        let library = Path::new(&library);
+        let spec: Vec<serde_json::Value> =
+            serde_json::from_str(&std::fs::read_to_string(spec).expect("spec")).expect("json");
+        let refs_file = library.join("references.json");
+        let mut refs: Vec<Reference> = std::fs::read(&refs_file)
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default();
+        let builtin = [
+            Action::PressAfterLoss,
+            Action::RecoveryRun,
+            Action::BuildUp,
+            Action::DefensiveBlock,
+        ];
+        let profile = &Profile::presets()[0];
+        for item in spec {
+            let dir = Path::new(item["dir"].as_str().expect("dir"));
+            let key = item["key"].as_str().expect("key").to_string();
+            let good = item["good"].as_bool().expect("good");
+            let colour: Vec<f32> = item["colour"]
+                .as_array()
+                .expect("colour")
+                .iter()
+                .map(|v| v.as_f64().unwrap_or(0.0) as f32)
+                .collect();
+            let set = TrackSet::load(dir).expect("tracks");
+            let calibration = Calibration::load(dir);
+            let players = Roster::load(dir).effective(&set);
+            let ctx = Context::with_players(&set, &calibration, &players);
+            let dist = |k: &[u8; 3]| {
+                (0..3)
+                    .map(|i| (f32::from(k[i]) - colour[i]).powi(2))
+                    .sum::<f32>()
+            };
+            let team = if dist(&set.team_colours[0]) <= dist(&set.team_colours[1]) {
+                1
+            } else {
+                2
+            };
+            let end_ms = set.samples.last().map_or(0, |s| s.ms);
+            let window = Window {
+                key: key.clone(),
+                team,
+                start_ms: 0,
+                end_ms,
+            };
+            let Some((generic_m, seen)) = measure_window(&ctx, &window) else {
+                println!("{}: sin medir", dir.display());
+                continue;
+            };
+            let mut measures = match builtin.iter().find(|a| a.key() == key) {
+                Some(action) => ctx
+                    .assess(
+                        &Occurrence {
+                            action: *action,
+                            team,
+                            start_ms: 0,
+                            end_ms,
+                        },
+                        profile,
+                        &[],
+                    )
+                    .map(|(m, _)| m)
+                    .unwrap_or_default(),
+                None => Measures::new(),
+            };
+            for (k, v) in generic_m {
+                measures.entry(k).or_insert(v);
+            }
+            println!(
+                "{key} {} equipo {team} visto {:.0}% | {}",
+                if good { "así sí" } else { "así no" },
+                seen * 100.0,
+                [
+                    "pressers_10m",
+                    "nearest_ball",
+                    "behind_ball",
+                    "block_length",
+                    "width",
+                    "support_15m",
+                    "superiority_zone",
+                    "progress_m",
+                    "regain"
+                ]
+                .iter()
+                .filter_map(|k| measures
+                    .get(*k)
+                    .copied()
+                    .flatten()
+                    .map(|v| format!("{k}={v:.1}")))
+                .collect::<Vec<_>>()
+                .join(" ")
+            );
+            refs.push(Reference {
+                action_key: key,
+                good,
+                measures,
+            });
+        }
+        let models = retrain_all(&refs);
+        std::fs::write(&refs_file, serde_json::to_vec_pretty(&refs).expect("json")).expect("write");
+        save_models(library, &models).expect("models");
+        println!("{} referencias, {} modelos", refs.len(), models.len());
+    }
 }
