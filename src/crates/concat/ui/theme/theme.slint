@@ -40,6 +40,7 @@
 import { Accent } from "accent.slint";
 import { Dark } from "dark.slint";
 import { Light } from "light.slint";
+import { Broadcast } from "broadcast.slint";
 
 export global Theme {
     /// Which palette every colour below is read from. Settings > Appearance
@@ -47,6 +48,13 @@ export global Theme {
     /// the tree is a property read away from it, so the window retones in a
     /// frame without anything being rebuilt.
     in-out property <bool> dark: true;
+    /// The broadcast palette ("Retransmisión", broadcast.slint) in place of
+    /// the other two, and the square corners that go with it. A third
+    /// answer to the theme rather than a mode of the dark one: Settings >
+    /// Appearance offers it beside Dark and Light (lib.rs,
+    /// `on_settings_theme_changed`), and `dark` stays true under it so
+    /// everything that asks "is the window dark?" keeps its answer.
+    in-out property <bool> broadcast: false;
     /// Which of the palettes' accents the accent tokens are read from: an
     /// index into `accent-names`, and into each palette's `accents`.
     /// Settings > Appearance picks it (lib.rs, `on_settings_accent_changed`)
@@ -69,7 +77,7 @@ export global Theme {
     /// name is the English word Settings shows for it, and the id it is
     /// remembered under in settings.json, lower-cased; the dialog holds the
     /// same list wrapped for translation, in this order.
-    out property <[string]> accent-names: ["Lime", "Sky", "Violet", "Rose", "Amber", "Mint"];
+    out property <[string]> accent-names: ["Lime", "Sky", "Violet", "Rose", "Amber", "Mint", "Gold"];
     /// The playhead's colour when one was picked by hand in Settings >
     /// Appearance, in place of the palette's own. Read only while
     /// `playhead-is-custom`, and one colour under both palettes, for the
@@ -94,6 +102,12 @@ export global Theme {
     // without touching a single element.
     out property <string> font: "Hanken Grotesk";
     out property <string> font-technical: "Hanken Grotesk";
+    /// Captions: panel and section titles, and the title strip's plate and
+    /// project name. The interface face, except under the broadcast theme,
+    /// which sets them in Barlow Condensed (bundled in app.slint) a step
+    /// larger, since a condensed face reads small at the same size.
+    out property <string> font-caption: broadcast ? "Barlow Condensed" : font;
+    out property <length> fs-caption: broadcast ? 16px : fs-lg;
     /// The scale. `fs` is the body size everything inherits; the two either
     /// side of it are the dense readout and the panel title. `xl` is for the
     /// few lines that are content rather than chrome — a project's name in a
@@ -127,13 +141,13 @@ export global Theme {
     // ── shape ────────────────────────────────────────────────────────────
     //
     // radii
-    out property <length> r-xs: 3px;
-    out property <length> r-sm: 5px;
-    out property <length> r: 7px;
-    out property <length> r-lg: 12px;
+    out property <length> r-xs: broadcast ? 1px : 3px;
+    out property <length> r-sm: broadcast ? 2px : 5px;
+    out property <length> r: broadcast ? 2px : 7px;
+    out property <length> r-lg: broadcast ? 3px : 12px;
     /// The dialog sheet, and nothing smaller. A modal is the largest rounded
     /// thing in the window and wants a corner to match.
-    out property <length> r-xl: 16px;
+    out property <length> r-xl: broadcast ? 4px : 16px;
 
     // metrics
     out property <length> h: 28px;        // standard control height
@@ -142,33 +156,33 @@ export global Theme {
     out property <length> label-w: 62px;
 
     // ── surfaces ─────────────────────────────────────────────────────────
-    out property <color> panel: dark ? Dark.panel : Light.panel;
-    out property <color> raised: dark ? Dark.raised : Light.raised;
-    out property <color> well: dark ? Dark.well : Light.well;
-    out property <color> field: dark ? Dark.field : Light.field;
-    out property <color> field-hover: dark ? Dark.field-hover : Light.field-hover;
-    out property <color> field-active: dark ? Dark.field-active : Light.field-active;
+    out property <color> panel: broadcast ? Broadcast.panel : dark ? Dark.panel : Light.panel;
+    out property <color> raised: broadcast ? Broadcast.raised : dark ? Dark.raised : Light.raised;
+    out property <color> well: broadcast ? Broadcast.well : dark ? Dark.well : Light.well;
+    out property <color> field: broadcast ? Broadcast.field : dark ? Dark.field : Light.field;
+    out property <color> field-hover: broadcast ? Broadcast.field-hover : dark ? Dark.field-hover : Light.field-hover;
+    out property <color> field-active: broadcast ? Broadcast.field-active : dark ? Dark.field-active : Light.field-active;
 
     // the launch screen's ladder: the same five steps, cut deeper. Read by
     // start.slint and by the title strip while it is up, and by nothing
     // else — the editor keeps the ladder above.
-    out property <color> launch-page: dark ? Dark.launch-page : Light.launch-page;
-    out property <color> launch-panel: dark ? Dark.launch-panel : Light.launch-panel;
-    out property <color> launch-well: dark ? Dark.launch-well : Light.launch-well;
-    out property <color> launch-raised: dark ? Dark.launch-raised : Light.launch-raised;
-    out property <color> launch-field: dark ? Dark.launch-field : Light.launch-field;
+    out property <color> launch-page: broadcast ? Broadcast.launch-page : dark ? Dark.launch-page : Light.launch-page;
+    out property <color> launch-panel: broadcast ? Broadcast.launch-panel : dark ? Dark.launch-panel : Light.launch-panel;
+    out property <color> launch-well: broadcast ? Broadcast.launch-well : dark ? Dark.launch-well : Light.launch-well;
+    out property <color> launch-raised: broadcast ? Broadcast.launch-raised : dark ? Dark.launch-raised : Light.launch-raised;
+    out property <color> launch-field: broadcast ? Broadcast.launch-field : dark ? Dark.launch-field : Light.launch-field;
     out property <color> launch-field-active:
-        dark ? Dark.launch-field-active : Light.launch-field-active;
+        broadcast ? Broadcast.launch-field-active : dark ? Dark.launch-field-active : Light.launch-field-active;
 
     // hairlines
-    out property <color> line: dark ? Dark.line : Light.line;
-    out property <color> line-strong: dark ? Dark.line-strong : Light.line-strong;
+    out property <color> line: broadcast ? Broadcast.line : dark ? Dark.line : Light.line;
+    out property <color> line-strong: broadcast ? Broadcast.line-strong : dark ? Dark.line-strong : Light.line-strong;
 
     // text
-    out property <color> fg: dark ? Dark.fg : Light.fg;
-    out property <color> fg-muted: dark ? Dark.fg-muted : Light.fg-muted;
-    out property <color> fg-dim: dark ? Dark.fg-dim : Light.fg-dim;
-    out property <color> fg-hot: dark ? Dark.fg-hot : Light.fg-hot;
+    out property <color> fg: broadcast ? Broadcast.fg : dark ? Dark.fg : Light.fg;
+    out property <color> fg-muted: broadcast ? Broadcast.fg-muted : dark ? Dark.fg-muted : Light.fg-muted;
+    out property <color> fg-dim: broadcast ? Broadcast.fg-dim : dark ? Dark.fg-dim : Light.fg-dim;
+    out property <color> fg-hot: broadcast ? Broadcast.fg-hot : dark ? Dark.fg-hot : Light.fg-hot;
 
     // accents — the chosen row of the palette that is on, spread into the
     // four tokens the tree has always read.
@@ -189,57 +203,59 @@ export global Theme {
         on: custom-light > 0.55 ? #16161a : #ffffff,
     };
     out property <Accent> tone: accent-is-custom ? custom-tone
+        : broadcast ? Broadcast.accents[accent-choice] : broadcast ? Broadcast.accents[accent-choice]
         : dark ? Dark.accents[accent-choice] : Light.accents[accent-choice];
     out property <color> accent: tone.accent;
     out property <color> accent-hover: tone.hover;
     out property <color> accent-soft: tone.soft;
     out property <color> on-accent: tone.on;
-    out property <color> green: dark ? Dark.green : Light.green;
-    out property <color> on-green: dark ? Dark.on-green : Light.on-green;
+    out property <color> green: broadcast ? Broadcast.green : dark ? Dark.green : Light.green;
+    out property <color> on-green: broadcast ? Broadcast.on-green : dark ? Dark.on-green : Light.on-green;
 
     /// The `index`th accent under the palette that is on, for the row in
     /// Settings that offers them: each is shown as it would be worn, so the
     /// choice is made in the room it will be seen in.
     public pure function accent-of(index: int) -> color {
-        return dark ? Dark.accents[index].accent : Light.accents[index].accent;
+        return broadcast ? Broadcast.accents[index].accent
+            : dark ? Dark.accents[index].accent : Light.accents[index].accent;
     }
 
     // the Rail's dragger
-    out property <color> grip: dark ? Dark.grip : Light.grip;
-    out property <color> grip-active: dark ? Dark.grip-active : Light.grip-active;
-    out property <color> grip-edge: dark ? Dark.grip-edge : Light.grip-edge;
+    out property <color> grip: broadcast ? Broadcast.grip : dark ? Dark.grip : Light.grip;
+    out property <color> grip-active: broadcast ? Broadcast.grip-active : dark ? Dark.grip-active : Light.grip-active;
+    out property <color> grip-edge: broadcast ? Broadcast.grip-edge : dark ? Dark.grip-edge : Light.grip-edge;
 
     // meter ramp
-    out property <color> meter-low: dark ? Dark.meter-low : Light.meter-low;
-    out property <color> meter-mid: dark ? Dark.meter-mid : Light.meter-mid;
-    out property <color> meter-high: dark ? Dark.meter-high : Light.meter-high;
+    out property <color> meter-low: broadcast ? Broadcast.meter-low : dark ? Dark.meter-low : Light.meter-low;
+    out property <color> meter-mid: broadcast ? Broadcast.meter-mid : dark ? Dark.meter-mid : Light.meter-mid;
+    out property <color> meter-high: broadcast ? Broadcast.meter-high : dark ? Dark.meter-high : Light.meter-high;
 
     // media kinds
-    out property <color> kind-video: dark ? Dark.kind-video : Light.kind-video;
-    out property <color> kind-video-well: dark ? Dark.kind-video-well : Light.kind-video-well;
-    out property <color> kind-audio: dark ? Dark.kind-audio : Light.kind-audio;
-    out property <color> kind-audio-well: dark ? Dark.kind-audio-well : Light.kind-audio-well;
-    out property <color> kind-image: dark ? Dark.kind-image : Light.kind-image;
-    out property <color> kind-image-well: dark ? Dark.kind-image-well : Light.kind-image-well;
-    out property <color> kind-text: dark ? Dark.kind-text : Light.kind-text;
-    out property <color> kind-text-well: dark ? Dark.kind-text-well : Light.kind-text-well;
-    out property <color> kind-filter: dark ? Dark.kind-filter : Light.kind-filter;
-    out property <color> kind-filter-well: dark ? Dark.kind-filter-well : Light.kind-filter-well;
-    out property <color> kind-shape: dark ? Dark.kind-shape : Light.kind-shape;
-    out property <color> kind-shape-well: dark ? Dark.kind-shape-well : Light.kind-shape-well;
+    out property <color> kind-video: broadcast ? Broadcast.kind-video : dark ? Dark.kind-video : Light.kind-video;
+    out property <color> kind-video-well: broadcast ? Broadcast.kind-video-well : dark ? Dark.kind-video-well : Light.kind-video-well;
+    out property <color> kind-audio: broadcast ? Broadcast.kind-audio : dark ? Dark.kind-audio : Light.kind-audio;
+    out property <color> kind-audio-well: broadcast ? Broadcast.kind-audio-well : dark ? Dark.kind-audio-well : Light.kind-audio-well;
+    out property <color> kind-image: broadcast ? Broadcast.kind-image : dark ? Dark.kind-image : Light.kind-image;
+    out property <color> kind-image-well: broadcast ? Broadcast.kind-image-well : dark ? Dark.kind-image-well : Light.kind-image-well;
+    out property <color> kind-text: broadcast ? Broadcast.kind-text : dark ? Dark.kind-text : Light.kind-text;
+    out property <color> kind-text-well: broadcast ? Broadcast.kind-text-well : dark ? Dark.kind-text-well : Light.kind-text-well;
+    out property <color> kind-filter: broadcast ? Broadcast.kind-filter : dark ? Dark.kind-filter : Light.kind-filter;
+    out property <color> kind-filter-well: broadcast ? Broadcast.kind-filter-well : dark ? Dark.kind-filter-well : Light.kind-filter-well;
+    out property <color> kind-shape: broadcast ? Broadcast.kind-shape : dark ? Dark.kind-shape : Light.kind-shape;
+    out property <color> kind-shape-well: broadcast ? Broadcast.kind-shape-well : dark ? Dark.kind-shape-well : Light.kind-shape-well;
 
     // timeline
-    out property <color> lane: dark ? Dark.lane : Light.lane;
-    out property <color> lane-alt: dark ? Dark.lane-alt : Light.lane-alt;
-    out property <color> ruler: dark ? Dark.ruler : Light.ruler;
-    out property <color> grid: dark ? Dark.grid : Light.grid;
+    out property <color> lane: broadcast ? Broadcast.lane : dark ? Dark.lane : Light.lane;
+    out property <color> lane-alt: broadcast ? Broadcast.lane-alt : dark ? Dark.lane-alt : Light.lane-alt;
+    out property <color> ruler: broadcast ? Broadcast.ruler : dark ? Dark.ruler : Light.ruler;
+    out property <color> grid: broadcast ? Broadcast.grid : dark ? Dark.grid : Light.grid;
     /// The palette's own playhead, for the dot in Settings that offers it
     /// back while a picked colour is on.
-    out property <color> playhead-default: dark ? Dark.playhead : Light.playhead;
+    out property <color> playhead-default: broadcast ? Broadcast.playhead : dark ? Dark.playhead : Light.playhead;
     out property <color> playhead: playhead-is-custom ? playhead-custom : playhead-default;
-    out property <color> wave: dark ? Dark.wave : Light.wave;
-    out property <color> wave-video: dark ? Dark.wave-video : Light.wave-video;
-    out property <color> wave-hot: dark ? Dark.wave-hot : Light.wave-hot;
+    out property <color> wave: broadcast ? Broadcast.wave : dark ? Dark.wave : Light.wave;
+    out property <color> wave-video: broadcast ? Broadcast.wave-video : dark ? Dark.wave-video : Light.wave-video;
+    out property <color> wave-hot: broadcast ? Broadcast.wave-hot : dark ? Dark.wave-hot : Light.wave-hot;
     /// Where a waveform's bar goes hot: the peak level, as a fraction of
     /// full scale, above which the part of the bar over it is drawn in
     /// `wave-hot`. -6 dBFS: a mix that keeps its peaks under it has
@@ -247,34 +263,34 @@ export global Theme {
     out property <float> wave-hot-line: 0.5012;
 
     // clip ink
-    out property <color> clip-ink: dark ? Dark.clip-ink : Light.clip-ink;
-    out property <color> clip-body: dark ? Dark.clip-body : Light.clip-body;
-    out property <color> clip-chip: dark ? Dark.clip-chip : Light.clip-chip;
-    out property <color> wave-centre: dark ? Dark.wave-centre : Light.wave-centre;
-    out property <color> fade-shade: dark ? Dark.fade-shade : Light.fade-shade;
-    out property <color> fade-edge: dark ? Dark.fade-edge : Light.fade-edge;
-    out property <color> transition-in: dark ? Dark.transition-in : Light.transition-in;
-    out property <color> transition-out: dark ? Dark.transition-out : Light.transition-out;
+    out property <color> clip-ink: broadcast ? Broadcast.clip-ink : dark ? Dark.clip-ink : Light.clip-ink;
+    out property <color> clip-body: broadcast ? Broadcast.clip-body : dark ? Dark.clip-body : Light.clip-body;
+    out property <color> clip-chip: broadcast ? Broadcast.clip-chip : dark ? Dark.clip-chip : Light.clip-chip;
+    out property <color> wave-centre: broadcast ? Broadcast.wave-centre : dark ? Dark.wave-centre : Light.wave-centre;
+    out property <color> fade-shade: broadcast ? Broadcast.fade-shade : dark ? Dark.fade-shade : Light.fade-shade;
+    out property <color> fade-edge: broadcast ? Broadcast.fade-edge : dark ? Dark.fade-edge : Light.fade-edge;
+    out property <color> transition-in: broadcast ? Broadcast.transition-in : dark ? Dark.transition-in : Light.transition-in;
+    out property <color> transition-out: broadcast ? Broadcast.transition-out : dark ? Dark.transition-out : Light.transition-out;
 
     // the monitor
-    out property <color> stage: dark ? Dark.stage : Light.stage;
-    out property <color> sample-ground: dark ? Dark.sample-ground : Light.sample-ground;
-    out property <color> on-stage-dim: dark ? Dark.on-stage-dim : Light.on-stage-dim;
+    out property <color> stage: broadcast ? Broadcast.stage : dark ? Dark.stage : Light.stage;
+    out property <color> sample-ground: broadcast ? Broadcast.sample-ground : dark ? Dark.sample-ground : Light.sample-ground;
+    out property <color> on-stage-dim: broadcast ? Broadcast.on-stage-dim : dark ? Dark.on-stage-dim : Light.on-stage-dim;
 
     // sheets over things that are not panels
-    out property <color> overlay: dark ? Dark.overlay : Light.overlay;
-    out property <color> scrim: dark ? Dark.scrim : Light.scrim;
-    out property <color> on-scrim: dark ? Dark.on-scrim : Light.on-scrim;
+    out property <color> overlay: broadcast ? Broadcast.overlay : dark ? Dark.overlay : Light.overlay;
+    out property <color> scrim: broadcast ? Broadcast.scrim : dark ? Dark.scrim : Light.scrim;
+    out property <color> on-scrim: broadcast ? Broadcast.on-scrim : dark ? Dark.on-scrim : Light.on-scrim;
 
     // destructive
-    out property <color> danger: dark ? Dark.danger : Light.danger;
-    out property <color> danger-soft: dark ? Dark.danger-soft : Light.danger-soft;
-    out property <color> danger-wash: dark ? Dark.danger-wash : Light.danger-wash;
-    out property <color> danger-edge: dark ? Dark.danger-edge : Light.danger-edge;
+    out property <color> danger: broadcast ? Broadcast.danger : dark ? Dark.danger : Light.danger;
+    out property <color> danger-soft: broadcast ? Broadcast.danger-soft : dark ? Dark.danger-soft : Light.danger-soft;
+    out property <color> danger-wash: broadcast ? Broadcast.danger-wash : dark ? Dark.danger-wash : Light.danger-wash;
+    out property <color> danger-edge: broadcast ? Broadcast.danger-edge : dark ? Dark.danger-edge : Light.danger-edge;
 
     // the window ground the panes float on
-    out property <color> page: dark ? Dark.page : Light.page;
-    out property <color> page-fg-muted: dark ? Dark.page-fg-muted : Light.page-fg-muted;
+    out property <color> page: broadcast ? Broadcast.page : dark ? Dark.page : Light.page;
+    out property <color> page-fg-muted: broadcast ? Broadcast.page-fg-muted : dark ? Dark.page-fg-muted : Light.page-fg-muted;
 
     // ── content ──────────────────────────────────────────────────────────
     //

@@ -60,10 +60,14 @@ export component PaneHeader inherits Rectangle {
         spacing: 8px;
 
         Text {
-            text: root.title;
+            // Under the broadcast theme a title is set as a caption is on
+            // air: capitals, spaced, in the heavy weight.
+            text: Theme.broadcast ? root.title.to-uppercase() : root.title;
             color: Theme.fg;
-            font-size: Theme.fs-lg;
-            font-weight: Theme.weight-title;
+            font-family: Theme.font-caption;
+            font-size: Theme.fs-caption;
+            font-weight: Theme.broadcast ? Theme.weight-display : Theme.weight-title;
+            letter-spacing: Theme.broadcast ? 1.1px : 0px;
             vertical-alignment: center;
         }
 

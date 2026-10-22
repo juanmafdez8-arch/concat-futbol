@@ -17,6 +17,9 @@ const FILE: &str = "settings.json";
 pub struct Preferences {
     /// The dark theme. `None` is the app's default, which is dark.
     pub dark: Option<bool>,
+    /// The broadcast theme, "Retransmisión", in place of Dark or Light.
+    /// `None` is this build's default, which is on.
+    pub broadcast: Option<bool>,
     /// The accent, by the lower-cased name the theme lists it under —
     /// "lime", "sky", ... — or as "#rrggbb" for a colour picked by hand.
     /// `None`, or a name no longer on the list, is the first one, which is

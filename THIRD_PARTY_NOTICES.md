@@ -66,6 +66,10 @@ licence travels with it. The files and the full licence text are in
   (https://github.com/marcologous/hanken-grotesk), SIL Open Font License
   1.1. The Regular, Medium, SemiBold, Bold and Italic static instances are
   embedded. See `fonts/LICENSE-HankenGrotesk.txt`.
+- **Barlow Condensed** — Copyright 2017 The Barlow Project Authors
+  (https://github.com/jpt/barlow), SIL Open Font License 1.1. The Medium,
+  SemiBold, Bold and ExtraBold static instances are embedded, for the
+  broadcast theme's captions. See `fonts/LICENSE-BarlowCondensed.txt`.
 
 The base fonts every title can use, embedded by `concat-text` (`BASE_FONTS`)
 and registered with the window for the text presets. Each file's licence is

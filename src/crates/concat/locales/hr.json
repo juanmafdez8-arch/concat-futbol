@@ -909,6 +909,8 @@
   "settings.logWarnings": "Upozorenja",
   "settings.mbOfMb": "{0} MB od {1} MB",
   "settings.mint": "Menta",
+  "settings.broadcast": "Broadcast",
+  "settings.gold": "Gold",
   "settings.mirrorOwn": "Vlastito zrcalo",
   "settings.modelReady": "Model spreman",
   "settings.models": "Modeli",

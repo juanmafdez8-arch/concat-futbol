@@ -1,0 +1,92 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Jareer and Concat contributors
+
+// The broadcast palette, "Retransmisión": the dark palette retoned to a
+// football broadcast - a green-black ground, panels the deep green of a
+// floodlit pitch at night, chalk-white text and a scoreboard yellow for the
+// playhead. It keeps every relationship dark.slint writes down (the ladder,
+// the ink on each accent, the kind pairs, lanes under the panel); only the
+// values move. The media kinds and the meter keep the dark palette's hues,
+// since they name things rather than dress them.
+import { Accent } from "accent.slint";
+
+export global Broadcast {
+    out property <color> panel: #10241a;
+    out property <color> raised: #163024;
+    out property <color> well: #0b1a12;
+    out property <color> field: #1b3a2b;
+    out property <color> field-hover: #224634;
+    out property <color> field-active: #2a543f;
+    out property <color> launch-page: #06100b;
+    out property <color> launch-panel: #0b1a12;
+    out property <color> launch-well: #08130d;
+    out property <color> launch-raised: #10241a;
+    out property <color> launch-field: #163024;
+    out property <color> launch-field-active: #1f3e2e;
+    out property <color> line: #eaf3ec1f;
+    out property <color> line-strong: #eaf3ec3d;
+    out property <color> fg: #eaf3ec;
+    out property <color> fg-muted: #93aa9c;
+    out property <color> fg-dim: #5f7a6a;
+    out property <color> fg-hot: #ffffff;
+
+    // accents: the dark palette's, in its order, and gold last - the
+    // scoreboard yellow this palette is first worn with.
+    out property <[Accent]> accents: [
+        { accent: #cbf53f, hover: #d9ff63, soft: #cbf53f33, on: #15220a },   // lime
+        { accent: #5fb8ff, hover: #82c9ff, soft: #5fb8ff33, on: #061c33 },   // sky
+        { accent: #b394ff, hover: #c6b0ff, soft: #b394ff33, on: #1d0f3d },   // violet
+        { accent: #ff6fa3, hover: #ff8fb8, soft: #ff6fa333, on: #38091c },   // rose
+        { accent: #ffb340, hover: #ffc46a, soft: #ffb34033, on: #2d1a00 },   // amber
+        { accent: #3fdcc4, hover: #6ae7d4, soft: #3fdcc433, on: #05261f },   // mint
+        { accent: #ffd23f, hover: #ffe066, soft: #ffd23f33, on: #2a2100 },   // gold
+    ];
+    out property <color> green: #30d158;
+    out property <color> on-green: #06210f;
+    out property <color> grip: #dcdce4;
+    out property <color> grip-active: #ffffff;
+    out property <color> grip-edge: #0000008c;
+    out property <color> meter-low: #34c759;
+    out property <color> meter-mid: #ffd60a;
+    out property <color> meter-high: #ff453a;
+    out property <color> kind-video: #3373d1;
+    out property <color> kind-video-well: #142238;
+    out property <color> kind-audio: #34c46f;
+    out property <color> kind-audio-well: #12301c;
+    out property <color> kind-image: #9f63d6;
+    out property <color> kind-image-well: #2a1e34;
+    out property <color> kind-text: #cf5a99;
+    out property <color> kind-text-well: #321c29;
+    out property <color> kind-filter: #6d63e8;
+    out property <color> kind-filter-well: #23204a;
+    out property <color> kind-shape: #d4a24b;
+    out property <color> kind-shape-well: #3a2d14;
+    out property <color> lane: #0c1d15;
+    out property <color> lane-alt: #0f2219;
+    out property <color> ruler: #0a1711;
+    out property <color> grid: #eaf3ec24;
+    out property <color> playhead: #ffd23f;
+    out property <color> wave: #a7f0c2b3;
+    out property <color> wave-video: #a9c8f5b3;
+    out property <color> wave-hot: #ffb340d9;
+    out property <color> clip-ink: #ffffff;
+    out property <color> clip-body: #ffe4b2b8;
+    out property <color> clip-chip: #00000040;
+    out property <color> wave-centre: #ffffff2e;
+    out property <color> fade-shade: #00000073;
+    out property <color> fade-edge: #ffffffa6;
+    out property <color> transition-in: #ffffffcc;
+    out property <color> transition-out: #ffffff73;
+    out property <color> stage: #000000;
+    out property <color> on-stage-dim: #ffffff6b;
+    out property <color> sample-ground: #1f3a2b;
+    out property <color> overlay: #00000099;
+    out property <color> scrim: #0000008c;
+    out property <color> on-scrim: #ffffff;
+    out property <color> danger: #ff5a5f;
+    out property <color> danger-soft: #ff5a5f24;
+    out property <color> danger-wash: #2a1416;
+    out property <color> danger-edge: #5a2b2e;
+    out property <color> page: #07100c;
+    out property <color> page-fg-muted: #93aa9c;
+}

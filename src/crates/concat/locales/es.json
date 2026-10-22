@@ -909,6 +909,8 @@
   "settings.logWarnings": "Avisos",
   "settings.mbOfMb": "{0} MB de {1} MB",
   "settings.mint": "Menta",
+  "settings.broadcast": "Retransmisión",
+  "settings.gold": "Oro",
   "settings.mirrorOwn": "Un espejo propio",
   "settings.modelReady": "Modelo listo",
   "settings.models": "Modelos",

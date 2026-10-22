@@ -436,7 +436,7 @@ export component SettingsDialog inherits Modal {
     /// The theme, chosen rather than flipped. A toggle in the strip could only
     /// say "the other one"; a page with two named options can say which one is
     /// on, which is the whole reason it moved in here.
-    callback theme-changed(dark: bool);
+    callback theme-changed(dark: bool, broadcast: bool);
     /// The accent, as an index into `Theme.accent-names`.
     callback accent-changed(index: int);
     /// A colour picked by hand in place of any on the list.
@@ -473,7 +473,7 @@ export component SettingsDialog inherits Modal {
     property <[string]> accent-labels: [
         I18n.t("settings.lime"), I18n.t("settings.sky"),
         I18n.t("settings.violet"), I18n.t("settings.rose"), I18n.t("settings.amber"),
-        I18n.t("settings.mint"),
+        I18n.t("settings.mint"), I18n.t("settings.gold"),
     ];
 
     /// The window is a phone's. No Remote page then - the API on a socket
@@ -745,9 +745,12 @@ export component SettingsDialog inherits Modal {
                     title: I18n.t("settings.theme");
 
                     SegmentedControl {
-                        options: [I18n.t("settings.dark"), I18n.t("settings.light")];
-                        current: Theme.dark ? 0 : 1;
-                        changed(index) => { root.theme-changed(index == 0); }
+                        options: [
+                            I18n.t("settings.dark"), I18n.t("settings.light"),
+                            I18n.t("settings.broadcast"),
+                        ];
+                        current: Theme.broadcast ? 2 : Theme.dark ? 0 : 1;
+                        changed(index) => { root.theme-changed(index != 1, index == 2); }
                     }
                 }
 

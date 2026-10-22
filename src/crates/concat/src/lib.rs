@@ -183,6 +183,8 @@ pub fn run() -> Result<(), slint::PlatformError> {
     studio.watch_packages();
     let dark = studio.prefs.dark.unwrap_or(true);
     app.global::<Theme>().set_dark(dark);
+    let broadcast = studio.prefs.broadcast.unwrap_or(true);
+    app.global::<Theme>().set_broadcast(broadcast);
     // The accent is remembered by name and the names live on the Theme
     // global, so the index is looked up there rather than kept in Rust too.
     // A remembered hex is a colour picked by hand, which is the slot past
@@ -200,6 +202,15 @@ pub fn run() -> Result<(), slint::PlatformError> {
                 let index = studio
                     .prefs
                     .accent_index(slint::Model::iter(&names).map(|name| name.to_string()));
+                // Nothing picked yet under the broadcast theme: its own gold,
+                // the scoreboard yellow it was drawn with.
+                let index = if studio.prefs.accent.is_none() && broadcast {
+                    slint::Model::iter(&names)
+                        .position(|name| name == "Gold")
+                        .unwrap_or(index)
+                } else {
+                    index
+                };
                 theme.set_accent_choice(index as i32);
             }
         }
@@ -1516,15 +1527,21 @@ pub fn run() -> Result<(), slint::PlatformError> {
     app.on_open_settings(on_window!(|state| {
         state.handle(Msg::Settings(SettingsMsg::Open));
     }));
-    // The theme is one bool on the Theme global, and every colour in the
-    // tree is a binding away from it; it is also remembered.
+    // The theme is two bools on the Theme global - dark, and broadcast over
+    // it - and every colour in the tree is a binding away from them; both
+    // are remembered.
     app.on_settings_theme_changed({
-        move |dark| {
-            log::info!("settings: theme {}", if dark { "dark" } else { "light" });
+        move |dark, broadcast| {
+            log::info!(
+                "settings: theme {}",
+                if broadcast { "broadcast" } else if dark { "dark" } else { "light" }
+            );
             Shell::with(|shell, app| {
                 app.global::<Theme>().set_dark(dark);
+                app.global::<Theme>().set_broadcast(broadcast);
                 let mut studio = shell.studio.borrow_mut();
                 studio.prefs.dark = Some(dark);
+                studio.prefs.broadcast = Some(broadcast);
                 studio.prefs.save(&studio.host.dirs);
             });
         }

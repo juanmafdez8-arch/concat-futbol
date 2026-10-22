@@ -15,6 +15,13 @@ import "../../concat-text/fonts/HankenGrotesk-Medium.ttf";
 import "../../concat-text/fonts/HankenGrotesk-SemiBold.ttf";
 import "../../concat-text/fonts/HankenGrotesk-Bold.ttf";
 import "../../concat-text/fonts/HankenGrotesk-Italic.ttf";
+// Barlow Condensed sets the broadcast theme's captions - panel titles, the
+// title strip - the narrow, capitalised face a scoreboard is set in.
+// Licensed under the SIL Open Font License; see LICENSE-BarlowCondensed.txt.
+import "../../concat-text/fonts/BarlowCondensed-Medium.ttf";
+import "../../concat-text/fonts/BarlowCondensed-SemiBold.ttf";
+import "../../concat-text/fonts/BarlowCondensed-Bold.ttf";
+import "../../concat-text/fonts/BarlowCondensed-ExtraBold.ttf";
 
 import { Theme } from "theme/theme.slint";
 import { Bezier, Curves, Fmt, Focus, Payload } from "util.slint";
@@ -242,7 +249,7 @@ export component App inherits Window {
     callback settings-show-log();
     callback settings-language-changed(index: int);
     callback settings-log-level-changed(index: int);
-    callback settings-theme-changed(dark: bool);
+    callback settings-theme-changed(dark: bool, broadcast: bool);
     callback settings-accent-changed(index: int);
     callback settings-accent-custom-changed(colour: color);
     callback settings-playhead-changed(colour: color);
@@ -777,7 +784,7 @@ export component App inherits Window {
         show-log => { root.settings-show-log(); }
         language-changed(index) => { root.settings-language-changed(index); }
         log-level-changed(index) => { root.settings-log-level-changed(index); }
-        theme-changed(dark) => { root.settings-theme-changed(dark); }
+        theme-changed(dark, broadcast) => { root.settings-theme-changed(dark, broadcast); }
         accent-changed(index) => { root.settings-accent-changed(index); }
         accent-custom-changed(colour) => { root.settings-accent-custom-changed(colour); }
         playhead-changed(colour) => { root.settings-playhead-changed(colour); }
