@@ -57,7 +57,10 @@ fn target_of<'a>(
     marks::Target {
         bbox: tracked.bbox,
         silhouette: silhouette.as_ref().map(|(mask, _)| mask.as_ref()),
-        shift: silhouette.as_ref().map(|(_, shift)| *shift).unwrap_or((0.0, 0.0)),
+        shift: silhouette
+            .as_ref()
+            .map(|(_, shift)| *shift)
+            .unwrap_or((0.0, 0.0)),
     }
 }
 
@@ -79,7 +82,8 @@ impl FootballJob {
     /// picked from. `treated` as for a cutout: whether the frame has the
     /// clip's crop and flips in it already.
     pub(crate) fn of(clip: &ExportClip, treated: bool) -> Option<FootballJob> {
-        let marked = !clip.football_dir.is_empty() && (!clip.football.is_empty() || clip.football_picking);
+        let marked =
+            !clip.football_dir.is_empty() && (!clip.football.is_empty() || clip.football_picking);
         if !marked && clip.drawings.is_empty() {
             return None;
         }
@@ -116,7 +120,12 @@ impl FootballJob {
     /// there is nothing to draw at this instant. `time` is the timeline's
     /// instant, which the drawings are timed by; `source_time` the
     /// footage's, which the players are found at.
-    pub(crate) fn draw(&self, frame: &Frame, source_time: Rational, time: Rational) -> Option<Frame> {
+    pub(crate) fn draw(
+        &self,
+        frame: &Frame,
+        source_time: Rational,
+        time: Rational,
+    ) -> Option<Frame> {
         let set = if self.dir.as_os_str().is_empty() {
             None
         } else {
@@ -194,20 +203,31 @@ impl FootballJob {
             return None;
         }
         let boxes = set.at(seconds);
-        let isolating = self.marks.iter().any(|mark| mark.style == MarkStyle::Isolate);
+        let boxes_by_id: HashMap<_, _> =
+            boxes.iter().map(|tracked| (tracked.id, *tracked)).collect();
+        let isolating = self
+            .marks
+            .iter()
+            .any(|mark| mark.style == MarkStyle::Isolate);
         if boxes.is_empty() && !isolating {
             return None;
         }
         let mut out = frame.clone();
         // Each mark's thing at this instant, with its silhouette: read once,
         // since a spotlight wants them all at once.
+        let mut silhouettes = HashMap::new();
         let found: Vec<_> = self
             .marks
             .iter()
             .map(|mark| {
-                let tracked = boxes.iter().find(|tracked| tracked.id == mark.track).copied();
+                let tracked = boxes_by_id.get(&mark.track).copied();
                 let silhouette = tracked.and_then(|tracked| {
-                    self.silhouette(set, mark.track, seconds, tracked.centre())
+                    silhouettes
+                        .entry(mark.track)
+                        .or_insert_with(|| {
+                            self.silhouette(set, mark.track, seconds, tracked.centre())
+                        })
+                        .clone()
                 });
                 (mark, tracked, silhouette)
             })

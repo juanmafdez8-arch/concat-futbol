@@ -228,12 +228,13 @@ pub fn spotlight(
     aspect: f32,
     strength: f32,
 ) {
-    if targets.is_empty() {
+    let strength = strength.clamp(0.0, 1.0);
+    if targets.is_empty() || strength == 0.0 {
         return;
     }
     // A pool a little wider than the player is tall, round on screen,
     // scaled by its size and stood up or laid down by its squash.
-    let pools: Vec<(f32, f32, f32, f32, f32)> = targets
+    let pools: Vec<(f32, f32, f32, f32, f32, [f32; 4])> = targets
         .iter()
         .map(|(target, shape)| {
             let [l, t, r, b] = target.bbox;
@@ -244,15 +245,25 @@ pub fn spotlight(
                 radius,
                 shape.squash.max(0.05),
                 shape.width.max(0.05),
+                [
+                    (l + r) * 0.5 - radius * shape.width.max(0.05) / aspect.max(1e-4),
+                    (t + b) * 0.5 - radius * shape.squash.max(0.05),
+                    (l + r) * 0.5 + radius * shape.width.max(0.05) / aspect.max(1e-4),
+                    (t + b) * 0.5 + radius * shape.squash.max(0.05),
+                ],
             )
         })
         .collect();
-    let dim = 1.0 - strength.clamp(0.0, 1.0) * 0.7;
+    let dim = 1.0 - strength * 0.7;
     let full = (0, 0, frame.width() as usize, frame.height() as usize);
     each_in(frame, full, mapping, |pixel, u, v| {
         let lit = pools
             .iter()
-            .map(|&(cx, cy, radius, squash, wide)| {
+            .filter(|pool| {
+                let bounds = pool.5;
+                u >= bounds[0] && u <= bounds[2] && v >= bounds[1] && v <= bounds[3]
+            })
+            .map(|&(cx, cy, radius, squash, wide, _)| {
                 let d = ((u - cx) * aspect / wide).hypot((v - cy) / squash) / radius;
                 1.0 - smoothstep(0.75, 1.0, d)
             })
@@ -489,13 +500,19 @@ pub fn isolate(frame: &mut Frame, target: &Target<'_>, mapping: &Mapping) {
     let region = pixel_box(frame, &super::grown(&target.bbox, 0.3), mapping, 2.0);
     let (width, height) = (frame.width() as usize, frame.height() as usize);
     let (x0, y0, x1, y1) = region.unwrap_or((0, 0, 0, 0));
-    for (y, row) in frame
-        .pixels_mut()
-        .chunks_exact_mut(width * BYTES_PER_PIXEL)
-        .enumerate()
-    {
-        for (x, pixel) in row.chunks_exact_mut(BYTES_PER_PIXEL).enumerate() {
-            if !(x0..x1).contains(&x) || !(y0..y1).contains(&y) {
+    let pixels = frame.pixels_mut();
+    let row_bytes = width * BYTES_PER_PIXEL;
+    for y in 0..height {
+        let row = &mut pixels[y * row_bytes..(y + 1) * row_bytes];
+        if y < y0 || y >= y1 {
+            for pixel in row.chunks_exact_mut(BYTES_PER_PIXEL) {
+                pixel[3] = 0;
+            }
+        } else {
+            for pixel in row[..x0 * BYTES_PER_PIXEL].chunks_exact_mut(BYTES_PER_PIXEL) {
+                pixel[3] = 0;
+            }
+            for pixel in row[x1 * BYTES_PER_PIXEL..].chunks_exact_mut(BYTES_PER_PIXEL) {
                 pixel[3] = 0;
             }
         }
@@ -811,7 +828,12 @@ mod tests {
             width: 2.0,
             ..Shape::DEFAULT
         });
-        assert!(left(&wide) < left(&normal), "{} {}", left(&wide), left(&normal));
+        assert!(
+            left(&wide) < left(&normal),
+            "{} {}",
+            left(&wide),
+            left(&normal)
+        );
         assert_eq!(top(&wide), top(&normal));
     }
 

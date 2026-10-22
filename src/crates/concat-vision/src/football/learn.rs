@@ -318,7 +318,16 @@ pub fn find_windows(ctx: &Context, def: &ActionDef, team: u8) -> Vec<Window> {
                     .iter()
                     .filter(|(ms, p)| *p == Some(team) && begin <= *ms && *ms <= end)
                     .filter_map(|(ms, _)| {
-                        let ball = ctx.snaps.iter().min_by_key(|s| s.ms.abs_diff(*ms))?.ball?;
+                        let index = ctx.snaps.partition_point(|snap| snap.ms < *ms);
+                        let before = index.checked_sub(1).and_then(|i| ctx.snaps.get(i));
+                        let after = ctx.snaps.get(index);
+                        let snap = match (before, after) {
+                            (Some(a), Some(b)) if b.ms.abs_diff(*ms) < a.ms.abs_diff(*ms) => b,
+                            (Some(a), _) => a,
+                            (None, Some(b)) => b,
+                            (None, None) => return None,
+                        };
+                        let ball = snap.ball?;
                         Some(*ms).filter(|_| {
                             ctx.sides
                                 .goal(team, *ms)
