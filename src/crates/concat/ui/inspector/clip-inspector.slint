@@ -963,7 +963,7 @@ export component VideoPanel inherits VerticalLayout {
     /// The chosen player's marks in a colour of the palette, by index.
     callback football-colour(index: int);
     /// One of the chosen player's marks' knobs: 0 size, 1 thickness,
-    /// 2 squash, 3 strength.
+    /// 2 length, 3 strength, 4 width.
     callback football-param(which: int, value: float);
     /// Telestration: the tool (0 line, 1 arrow, 2 curve, 3 zone, 4 link;
     /// the same again puts it away), its style (0 dashed, 1 thickness,
@@ -1622,6 +1622,17 @@ export component VideoPanel inherits VerticalLayout {
                 default-value: 1;
                 fmt: ParamFormat.rate;
                 changed(v) => { root.football-param(2, v); }
+            }
+
+            if root.selected.football-analysed && root.selected.football-marks-here > 0: Param {
+                label: I18n.t("football.width");
+                value: root.selected.football-width;
+                minimum: 0.25;
+                maximum: 4;
+                step: 0.05;
+                default-value: 1;
+                fmt: ParamFormat.rate;
+                changed(v) => { root.football-param(4, v); }
             }
 
             if root.selected.football-analysed && root.selected.football-marks-here > 0: Param {

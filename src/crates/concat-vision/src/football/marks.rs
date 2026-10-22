@@ -27,8 +27,11 @@ pub struct Shape {
     pub size: f32,
     /// Weight of the line.
     pub thickness: f32,
-    /// Height of the round marks and the arrow.
+    /// Length: the height of the round marks and the frame, the arrow's
+    /// length.
     pub squash: f32,
+    /// Width: the round marks', the frame's and the arrow's, on its own.
+    pub width: f32,
 }
 
 impl Shape {
@@ -37,6 +40,7 @@ impl Shape {
         size: 1.0,
         thickness: 1.0,
         squash: 1.0,
+        width: 1.0,
     };
 }
 
@@ -229,12 +233,18 @@ pub fn spotlight(
     }
     // A pool a little wider than the player is tall, round on screen,
     // scaled by its size and stood up or laid down by its squash.
-    let pools: Vec<(f32, f32, f32, f32)> = targets
+    let pools: Vec<(f32, f32, f32, f32, f32)> = targets
         .iter()
         .map(|(target, shape)| {
             let [l, t, r, b] = target.bbox;
             let radius = ((b - t).max((r - l) * aspect) * 0.9 + 0.02) * shape.size;
-            ((l + r) * 0.5, (t + b) * 0.5, radius, shape.squash.max(0.05))
+            (
+                (l + r) * 0.5,
+                (t + b) * 0.5,
+                radius,
+                shape.squash.max(0.05),
+                shape.width.max(0.05),
+            )
         })
         .collect();
     let dim = 1.0 - strength.clamp(0.0, 1.0) * 0.7;
@@ -242,8 +252,8 @@ pub fn spotlight(
     each_in(frame, full, mapping, |pixel, u, v| {
         let lit = pools
             .iter()
-            .map(|&(cx, cy, radius, squash)| {
-                let d = ((u - cx) * aspect).hypot((v - cy) / squash) / radius;
+            .map(|&(cx, cy, radius, squash, wide)| {
+                let d = ((u - cx) * aspect / wide).hypot((v - cy) / squash) / radius;
                 1.0 - smoothstep(0.75, 1.0, d)
             })
             .fold(0.0, f32::max);
@@ -274,8 +284,9 @@ pub fn ring(
     // Radii in source fractions: a little wider than a stride, and a
     // third as tall, which is how a circle on the pitch looks from a
     // broadcast gantry.
-    let rx = ((r - l) * 0.9).max(height * 0.45 / aspect) * shape.size;
-    let ry = rx * aspect * 0.32 * shape.squash;
+    let across = ((r - l) * 0.9).max(height * 0.45 / aspect) * shape.size;
+    let rx = across * shape.width;
+    let ry = across * aspect * 0.32 * shape.squash;
     let thick = (0.18 * shape.thickness).clamp(0.03, 0.9);
     let ring_box = [cx - rx * 1.3, cy - ry * 1.6, cx + rx * 1.3, cy + ry * 1.6];
     let Some(region) = pixel_box(frame, &ring_box, mapping, 2.0) else {
@@ -395,7 +406,7 @@ pub fn arrow(
     // player, and as wide as it is long, on screen.
     let tip = t - height * 0.12;
     let long = height * 0.45 * shape.size * shape.squash;
-    let half = height * 0.22 * shape.size / aspect.max(1e-4);
+    let half = height * 0.22 * shape.size * shape.width / aspect.max(1e-4);
     let arrow_box = [cx - half, tip - long, cx + half, tip];
     let Some(region) = pixel_box(frame, &arrow_box, mapping, 2.0) else {
         return;
@@ -425,7 +436,8 @@ pub fn arrow(
 }
 
 /// A frame drawn round the thing: a rectangle a little bigger than it,
-/// its line as heavy as `shape.thickness` says.
+/// its line as heavy as `shape.thickness` says, stretched across by
+/// `shape.width` and up and down by `shape.squash`.
 pub fn frame_round(
     frame: &mut Frame,
     target: &Target<'_>,
@@ -434,7 +446,7 @@ pub fn frame_round(
     strength: f32,
     shape: Shape,
 ) {
-    let grown = super::grown(&target.bbox, 0.12 * shape.size);
+    let grown = stretched(&super::grown(&target.bbox, 0.12 * shape.size), shape);
     let Some((x0, y0, x1, y1)) = pixel_box(frame, &grown, mapping, 0.0) else {
         return;
     };
@@ -458,6 +470,15 @@ pub fn frame_round(
             }
         }
     }
+}
+
+/// A box scaled about its centre: across by the shape's width, up and down
+/// by its length.
+fn stretched(bbox: &[f32; 4], shape: Shape) -> [f32; 4] {
+    let [l, t, r, b] = *bbox;
+    let (cx, cy) = ((l + r) * 0.5, (t + b) * 0.5);
+    let (hw, hh) = ((r - l) * 0.5 * shape.width, (b - t) * 0.5 * shape.squash);
+    [cx - hw, cy - hh, cx + hw, cy + hh]
 }
 
 /// Everything but the thing made transparent: the layer a moved or a
@@ -766,6 +787,32 @@ mod tests {
             .filter(|&y| frame.pixel(27, y).unwrap()[2] == 255)
             .count();
         assert!(blue_edges > 10, "{blue_edges}");
+    }
+
+    #[test]
+    fn a_wider_frame_reaches_further_across_only() {
+        let draw = |shape: Shape| {
+            let mut frame = grass_with_player();
+            frame_round(
+                &mut frame,
+                &target(),
+                &Mapping::IDENTITY,
+                [0, 0, 255],
+                1.0,
+                shape,
+            );
+            frame
+        };
+        let blue = |frame: &Frame, x, y| frame.pixel(x, y).unwrap()[2] == 255;
+        let left = |frame: &Frame| (0..64).find(|&x| blue(frame, x, 32)).unwrap();
+        let top = |frame: &Frame| (0..64).find(|&y| blue(frame, 32, y)).unwrap();
+        let normal = draw(Shape::DEFAULT);
+        let wide = draw(Shape {
+            width: 2.0,
+            ..Shape::DEFAULT
+        });
+        assert!(left(&wide) < left(&normal), "{} {}", left(&wide), left(&normal));
+        assert_eq!(top(&wide), top(&normal));
     }
 
     #[test]

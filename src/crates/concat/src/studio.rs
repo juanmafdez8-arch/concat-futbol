@@ -10754,7 +10754,7 @@ Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque
     }
 
     /// One knob of the chosen player's marks on the selected clip - 0 size,
-    /// 1 thickness, 2 squash, 3 strength - set on all of them at once. A
+    /// 1 thickness, 2 length, 3 strength, 4 width - set on all of them at once. A
     /// drag on the knob is one undo step, as every inspector knob is.
     pub fn football_param(&mut self, which: i32, value: f32) {
         let (Some(id), Some(track)) = (self.sole_selection(), self.football_chosen) else {
@@ -10774,6 +10774,7 @@ Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque
                         0 => mark.size = value,
                         1 => mark.thickness = value,
                         2 => mark.squash = value,
+                        4 => mark.width = value,
                         _ => mark.strength = value,
                     }
                 }
@@ -14349,6 +14350,7 @@ Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque
             football_size: self.football_knob(clip, |mark| mark.size),
             football_thickness: self.football_knob(clip, |mark| mark.thickness),
             football_squash: self.football_knob(clip, |mark| mark.squash),
+            football_width: self.football_knob(clip, |mark| mark.width),
             football_strength: self
                 .football_chosen
                 .and_then(|track| clip.football.iter().find(|mark| mark.track == track))

@@ -45,6 +45,7 @@ fn shape_of(mark: &FootballMark) -> marks::Shape {
         size: mark.size as f32,
         thickness: mark.thickness as f32,
         squash: mark.squash as f32,
+        width: mark.width as f32,
     }
 }
 

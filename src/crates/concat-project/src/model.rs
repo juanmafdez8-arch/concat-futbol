@@ -497,12 +497,16 @@ pub struct FootballMark {
     /// ring's band and the frame's border.
     #[serde(default = "one", skip_serializing_if = "is_one")]
     pub thickness: f64,
-    /// How tall the round marks are against their default, `0.25..=4`:
-    /// under 1 flattens the ring and the pool further onto the pitch, over
-    /// 1 stands them up, for a camera higher or lower than a broadcast
-    /// gantry. The arrow's length too.
+    /// How long the mark is against its default, `0.25..=4`: the ring's,
+    /// the pool's and the frame's height - under 1 flattens the round
+    /// marks further onto the pitch, over 1 stands them up - and the
+    /// arrow's length.
     #[serde(default = "one", skip_serializing_if = "is_one")]
     pub squash: f64,
+    /// How wide the mark is against its default, `0.25..=4`, apart from its
+    /// length: the ring's, the pool's, the frame's and the arrow's width.
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub width: f64,
 }
 
 fn one() -> f64 {
@@ -513,7 +517,7 @@ fn is_one(value: &f64) -> bool {
     (*value - 1.0).abs() < 1e-9
 }
 
-/// The least and most a mark's size, thickness and squash may be.
+/// The least and most a mark's size, thickness, length and width may be.
 pub const MARK_SCALE: (f64, f64) = (0.25, 4.0);
 
 /// What a football mark does to the thing it marks.
@@ -555,6 +559,7 @@ impl FootballMark {
             size: 1.0,
             thickness: 1.0,
             squash: 1.0,
+            width: 1.0,
         }
     }
 
@@ -566,7 +571,12 @@ impl FootballMark {
             default_mark_strength()
         };
         let (least, most) = MARK_SCALE;
-        for value in [&mut self.size, &mut self.thickness, &mut self.squash] {
+        for value in [
+            &mut self.size,
+            &mut self.thickness,
+            &mut self.squash,
+            &mut self.width,
+        ] {
             *value = if value.is_finite() {
                 value.clamp(least, most)
             } else {

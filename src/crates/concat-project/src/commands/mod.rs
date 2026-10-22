@@ -991,7 +991,7 @@ impl Command {
             Command::AddCutoutStroke { stroke, .. } => bad_stroke(stroke),
             Command::SetClipFootball { marks, .. } => bad(marks
                 .iter()
-                .flat_map(|mark| [mark.strength, mark.size, mark.thickness, mark.squash])),
+                .flat_map(|mark| [mark.strength, mark.size, mark.thickness, mark.squash, mark.width])),
             Command::SetClipDrawings { drawings, .. } => bad(drawings.iter().flat_map(|drawing| {
                 [drawing.start, drawing.hold, drawing.reveal, drawing.thickness, drawing.bend]
                     .into_iter()
