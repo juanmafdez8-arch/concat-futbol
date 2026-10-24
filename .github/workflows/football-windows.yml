@@ -78,6 +78,15 @@ jobs:
         # Without `infer`: ONNX Runtime's own tests crash the runner's heap when they load models in parallel; the football tracker, marks and drawings are pure Rust and run here.
         run: cargo test --release -p concat-project -p concat-vision
 
+      # The library tools the analyst's own machine has no compiler for:
+      # the batch player analysis (concat-host's football_batch) and the
+      # engine's ignored harnesses (learning a library from a spec), built
+      # here and shipped in the zip's tools/ folder.
+      - name: Library tools
+        shell: bash
+        working-directory: src
+        run: cargo test --release -p concat-host --test football_batch --no-run
+
       - name: Build
         shell: bash
         working-directory: src
@@ -103,6 +112,11 @@ jobs:
           Copy-Item "$env:FFMPEG_DIR\bin\*.dll" "stage\$name\"
           Copy-Item "$env:SHERPA_DLL_DIR\*.dll" "stage\$name\"
           Copy-Item LICENSE, THIRD_PARTY_NOTICES.md "stage\$name\"
+          # The tools beside the program, so they load the same libraries.
+          foreach ($tool in "football_batch", "concat_vision") {
+            $exe = Get-ChildItem "src	argetelease\deps\$tool-*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            if ($exe) { Copy-Item $exe.FullName "stage\$name\$tool-tool.exe" }
+          }
 
       - uses: actions/upload-artifact@v4
         with:

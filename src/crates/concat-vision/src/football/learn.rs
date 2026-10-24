@@ -37,17 +37,18 @@ pub const GENERIC_KPIS: &[&str] = &[
 pub fn generic(window: &[Snapshot], team: u8, goal: Goal) -> Measures {
     let mut out = Measures::new();
     let start = window.first().map_or(0, |s| s.ms);
-    let visible: Vec<&Snapshot> = window
-        .iter()
-        .filter(|s| eval::shape(s, team, goal, 20.0).observability >= 0.6)
-        .collect();
+    let mut visible = Vec::new();
+    let mut shapes = Vec::new();
+    for snapshot in window {
+        let shape = eval::shape(snapshot, team, goal, 20.0);
+        if shape.observability >= 0.6 {
+            visible.push(snapshot);
+            shapes.push(shape);
+        }
+    }
     let mut put = |k: &str, v| {
         out.insert(k.to_owned(), v);
     };
-    let shapes: Vec<Shape> = visible
-        .iter()
-        .map(|s| eval::shape(s, team, goal, 20.0))
-        .collect();
     let avg = |f: fn(&Shape) -> Option<f64>| mean_values(shapes.iter().filter_map(f));
     put("block_length", avg(|s| s.block_length));
     put("width", avg(|s| s.width));
@@ -360,12 +361,9 @@ pub fn find_windows(ctx: &Context, def: &ActionDef, team: u8) -> Vec<Window> {
 /// Measure a custom action window and return its mean shape observability.
 pub fn measure_window(ctx: &Context, w: &Window) -> Option<(Measures, f64)> {
     let goal = ctx.sides.goal(w.team, w.start_ms)?;
-    let snaps: Vec<Snapshot> = ctx
-        .snaps
-        .iter()
-        .filter(|s| w.start_ms <= s.ms && s.ms <= w.end_ms)
-        .cloned()
-        .collect();
+    let start = ctx.snaps.partition_point(|s| s.ms < w.start_ms);
+    let end = ctx.snaps.partition_point(|s| s.ms <= w.end_ms).max(start);
+    let snaps = &ctx.snaps[start..end];
     let observability = if snaps.is_empty() {
         0.0
     } else {
@@ -375,7 +373,7 @@ pub fn measure_window(ctx: &Context, w: &Window) -> Option<(Measures, f64)> {
             .sum::<f64>()
             / snaps.len() as f64
     };
-    Some((generic(&snaps, w.team, goal), observability))
+    Some((generic(snaps, w.team, goal), observability))
 }
 
 /// Load custom actions from `actions.json`, returning an empty list if unavailable.

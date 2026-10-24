@@ -1193,13 +1193,15 @@ impl Context {
         refs: &[Reference],
     ) -> Option<(Measures, Judgement)> {
         let goal = self.sides.goal(occurrence.team, occurrence.start_ms)?;
-        let window: Vec<Snapshot> = self
+        let start = self
             .snaps
-            .iter()
-            .filter(|s| occurrence.start_ms <= s.ms && s.ms <= occurrence.end_ms)
-            .cloned()
-            .collect();
-        let measures = measure(occurrence.action, occurrence.team, &window, goal);
+            .partition_point(|s| s.ms < occurrence.start_ms);
+        let end = self
+            .snaps
+            .partition_point(|s| s.ms <= occurrence.end_ms)
+            .max(start);
+        let window = &self.snaps[start..end];
+        let measures = measure(occurrence.action, occurrence.team, window, goal);
         // How much of the window could be seen, on average.
         let observability = if window.is_empty() {
             0.0
