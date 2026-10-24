@@ -5,6 +5,7 @@ import { I18n } from "i18n.slint";
 import { Theme } from "theme/theme.slint";
 import { Glyph, Icon } from "icons.slint";
 import { AddPaneButton, PaneKind } from "workspace/pane-switcher.slint";
+import { Editor } from "editor.slint";
 
 // The custom title bar.
 //
@@ -106,6 +107,13 @@ component HeaderIconButton inherits Rectangle {
 
 export component TitleBar inherits Rectangle {
     in property <string> project-name: I18n.t("common.untitledProject");
+    /// The match the project name reads as - "Rayados 2-3 Necaxa" - as the
+    /// two sides' short names and the score; all empty when it reads as
+    /// none. The broadcast theme shows them as a scoreboard in place of
+    /// the name. Read in Rust (studio.rs, `scoreboard`).
+    in property <string> score-home;
+    in property <string> score-away;
+    in property <string> score;
     /// "saved", "saving…" — the little truth beside the name. Empty hides it.
     in property <string> status: I18n.t("common.saved");
     /// Leaves room for the traffic lights and drops nothing else; on other
@@ -368,11 +376,78 @@ export component TitleBar inherits Rectangle {
         }
     }
 
+    // The scoreboard, where the name goes, under the broadcast theme and a
+    // project named for a match: the two sides on either side of the score,
+    // and the playhead's minute in the accent, as a broadcast's bug.
+    property <bool> on-air: Theme.broadcast && !root.minimal && root.score != "";
+    property <int> clock: Math.max(0, Math.floor(Editor.playhead));
+    if root.on-air: HorizontalLayout {
+        x: (parent.width - self.preferred-width) / 2;
+        y: 4px;
+        height: parent.height - 10px;
+        width: self.preferred-width;
+
+        Rectangle {
+            width: home.preferred-width + 20px;
+            background: Theme.raised;
+            home := Text {
+                text: root.score-home;
+                color: Theme.fg;
+                font-family: Theme.font-caption;
+                font-size: 18px;
+                font-weight: 700;
+                letter-spacing: 1.2px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+        Rectangle {
+            width: tally.preferred-width + 22px;
+            background: Theme.fg;
+            tally := Text {
+                text: root.score;
+                color: Theme.page;
+                font-family: Theme.font-caption;
+                font-size: 18px;
+                font-weight: 800;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+        Rectangle {
+            width: away.preferred-width + 20px;
+            background: Theme.raised;
+            away := Text {
+                text: root.score-away;
+                color: Theme.fg;
+                font-family: Theme.font-caption;
+                font-size: 18px;
+                font-weight: 700;
+                letter-spacing: 1.2px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+        Rectangle {
+            width: minute.preferred-width + 20px;
+            minute := Text {
+                text: Math.floor(root.clock / 60) + ":"
+                    + (Math.mod(root.clock, 60) < 10 ? "0" : "") + Math.mod(root.clock, 60);
+                color: Theme.accent;
+                font-family: Theme.font-caption;
+                font-size: 18px;
+                font-weight: 700;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+
     // Centre: the project name, placed against the whole strip rather than
     // laid out, so it stays centred in the window and not in whatever space
     // the menus leave over.
     centre := HorizontalLayout {
-        visible: !root.minimal;
+        visible: !root.minimal && !root.on-air;
         x: (parent.width - self.preferred-width) / 2;
         y: 0;
         width: self.preferred-width;

@@ -14600,6 +14600,10 @@ Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque
 
         app.set_on_start(self.on_start);
         app.set_project_name(self.project_name.as_str().into());
+        let (home, score, away) = scoreboard(&self.project_name).unwrap_or_default();
+        app.set_score_home(home.into());
+        app.set_score(score.into());
+        app.set_score_away(away.into());
         app.set_project_status(
             if self.dirty {
                 "unsaved changes"
@@ -16031,4 +16035,59 @@ pub struct Judged {
     pub measures: concat_vision::football::eval::Measures,
     /// The verdict and its reasons.
     pub judgement: concat_vision::football::eval::Judgement,
+}
+
+/// The match a project's name reads as, for the broadcast scoreboard: the
+/// first `<n>-<m>` standing on its own (an en dash too), the sides before
+/// and after it, each cut to the first three letters of its first word in
+/// capitals. "Rayados Sub-17 2-3 Necaxa" reads as ("RAY", "2 – 3", "NEC");
+/// a name with no such score, or nothing on one side of it, reads as none.
+fn scoreboard(name: &str) -> Option<(String, String, String)> {
+    let words: Vec<&str> = name.split_whitespace().collect();
+    let goals = |text: &str| {
+        !text.is_empty() && text.len() <= 2 && text.chars().all(|c| c.is_ascii_digit())
+    };
+    let (at, home_goals, away_goals) = words.iter().enumerate().find_map(|(i, word)| {
+        let (a, b) = word.split_once('-').or_else(|| word.split_once('–'))?;
+        (goals(a) && goals(b)).then(|| (i, a.to_owned(), b.to_owned()))
+    })?;
+    let short = |side: &[&str]| -> Option<String> {
+        let first = side.first()?;
+        let short: String = first
+            .chars()
+            .filter(|c| c.is_alphanumeric())
+            .take(3)
+            .collect::<String>()
+            .to_uppercase();
+        (!short.is_empty()).then_some(short)
+    };
+    Some((
+        short(&words[..at])?,
+        format!("{home_goals} – {away_goals}"),
+        short(&words[at + 1..])?,
+    ))
+}
+
+#[cfg(test)]
+mod scoreboard_tests {
+    use super::scoreboard;
+
+    #[test]
+    fn a_match_name_reads_as_a_scoreboard() {
+        assert_eq!(
+            scoreboard("Rayados Sub-17 2-3 Necaxa"),
+            Some(("RAY".into(), "2 – 3".into(), "NEC".into()))
+        );
+        assert_eq!(
+            scoreboard("Atlas 1–0 Chivas"),
+            Some(("ATL".into(), "1 – 0".into(), "CHI".into()))
+        );
+    }
+
+    #[test]
+    fn other_names_read_as_none() {
+        assert_eq!(scoreboard("Biblioteca Atlas"), None);
+        assert_eq!(scoreboard("2-3 Necaxa"), None);
+        assert_eq!(scoreboard("Sesión 2026-10-21"), None);
+    }
 }

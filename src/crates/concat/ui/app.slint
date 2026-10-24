@@ -172,6 +172,11 @@ export component App inherits Window {
     // the library callbacks above.
     in property <string> project-name: I18n.t("common.untitledProject");
     in property <string> project-status: I18n.t("common.saved");
+    /// The match the project name reads as, for the broadcast scoreboard;
+    /// see TitleBar.
+    in property <string> score-home;
+    in property <string> score-away;
+    in property <string> score;
     in property <bool> macos;
     /// The window is a phone's: one screen, held upright, driven by a
     /// finger. The editor is then the phone shell (ui/phone/) - no title
@@ -638,6 +643,9 @@ export component App inherits Window {
                 deep: root.on-start;
                 project-name: root.project-name;
                 status: root.project-status;
+                score-home: root.score-home;
+                score-away: root.score-away;
+                score: root.score;
 
                 menu: root.open-menu;
                 keyboard-menu: root.keyboard-menu;

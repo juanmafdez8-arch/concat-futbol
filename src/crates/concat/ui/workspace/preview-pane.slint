@@ -206,6 +206,92 @@ component RatioPicker inherits Rectangle {
     }
 }
 
+// ── the broadcast captions ───────────────────────────────────────────────────
+//
+// Under the broadcast theme the monitor carries what a broadcast puts over a
+// player: a lower third with the chosen player's shirt number on an accent
+// plate and her name and position beside it, and in the corner the verdict
+// of the register in hand. On the monitor only - they say what the analyst
+// is looking at, and nothing here reaches an export.
+
+/// The chosen player's lower third.
+component PlayerCaption inherits Rectangle {
+    in property <string> number;
+    in property <string> name;
+    in property <string> role;
+
+    height: 54px;
+    width: row.preferred-width;
+
+    row := HorizontalLayout {
+        Rectangle {
+            width: Math.max(50px, digits.preferred-width + 22px);
+            background: Theme.accent;
+
+            digits := Text {
+                text: root.number == "" ? "#" : root.number;
+                color: Theme.on-accent;
+                font-family: Theme.font-caption;
+                font-size: 32px;
+                font-weight: 800;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        if root.name != "" || root.role != "": Rectangle {
+            background: Theme.page.with-alpha(0.9);
+
+            VerticalLayout {
+                padding-left: 14px;
+                padding-right: 18px;
+                alignment: center;
+
+                if root.name != "": Text {
+                    text: root.name.to-uppercase();
+                    color: Theme.fg;
+                    font-family: Theme.font-caption;
+                    font-size: 23px;
+                    font-weight: 700;
+                    letter-spacing: 1px;
+                }
+                if root.role != "": Text {
+                    text: root.role.to-uppercase();
+                    color: Theme.fg-muted;
+                    font-family: Theme.font-caption;
+                    font-size: 14px;
+                    font-weight: 600;
+                    letter-spacing: 1.2px;
+                }
+            }
+        }
+    }
+}
+
+/// The verdict of the register in hand, as a corner tag: `kind` as the
+/// Editor's `eval-kind` (1 good, 2 improvable, 3 bad, 4 not enough seen).
+component VerdictTag inherits Rectangle {
+    in property <int> kind;
+    in property <string> verdict;
+
+    height: 30px;
+    width: label.preferred-width + 24px;
+    background: root.kind == 1 ? Theme.accent
+        : root.kind == 3 ? Theme.danger
+        : Theme.page.with-alpha(0.9);
+
+    label := Text {
+        x: 12px;
+        y: (parent.height - self.height) / 2;
+        text: root.verdict.to-uppercase();
+        color: root.kind == 1 ? Theme.on-accent : root.kind == 3 ? Theme.fg-hot : Theme.fg;
+        font-family: Theme.font-caption;
+        font-size: 16px;
+        font-weight: 700;
+        letter-spacing: 1.2px;
+    }
+}
+
 // ── the stage's selection ────────────────────────────────────────────────────
 //
 // The selected pictures, outlined where the compositor put them, with a grip
@@ -979,6 +1065,25 @@ export component PreviewPane inherits Rectangle {
             if Editor.analysis-available && root.source-name == "": AnalysisHint {
                 x: stage.x + (stage.width - self.width) / 2;
                 y: stage.y + 10px;
+            }
+
+            // The broadcast captions: the chosen player's lower third, and
+            // the verdict of the register in hand in the top corner.
+            if Theme.broadcast && root.has-picture && root.source-name == ""
+                && Editor.pitch-chosen-id >= 0: PlayerCaption {
+                x: stage.x;
+                y: stage.y + stage.height - self.height - Math.min(28px, stage.height * 0.06);
+                number: Editor.pitch-chosen-number;
+                name: Editor.pitch-chosen-name;
+                role: Editor.pitch-chosen-role > 0
+                    ? Editor.pitch-roles[Editor.pitch-chosen-role] : "";
+            }
+            if Theme.broadcast && root.has-picture && root.source-name == ""
+                && Editor.eval-kind > 0: VerdictTag {
+                x: stage.x + stage.width - self.width - 12px;
+                y: stage.y + 12px;
+                kind: Editor.eval-kind;
+                verdict: Editor.eval-verdict;
             }
 
             // A library file on the monitor: its name, and the cross that
