@@ -114,7 +114,7 @@ jobs:
           Copy-Item LICENSE, THIRD_PARTY_NOTICES.md "stage\$name\"
           # The tools beside the program, so they load the same libraries.
           foreach ($tool in "football_batch", "concat_vision") {
-            $exe = Get-ChildItem "src	argetelease\deps\$tool-*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            $exe = Get-ChildItem "src\target\release\deps\$tool-*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
             if ($exe) { Copy-Item $exe.FullName "stage\$name\$tool-tool.exe" }
           }
 
