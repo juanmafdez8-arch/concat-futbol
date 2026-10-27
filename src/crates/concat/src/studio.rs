@@ -14606,9 +14606,9 @@ Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque
         app.set_score_away(away.into());
         app.set_project_status(
             if self.dirty {
-                "unsaved changes"
+                t("common.unsavedChanges")
             } else {
-                "saved"
+                t("common.saved")
             }
             .into(),
         );

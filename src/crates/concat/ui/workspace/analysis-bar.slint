@@ -27,7 +27,7 @@ component BarButton inherits Rectangle {
     width: 34px;
     height: 34px;
     border-radius: 8px;
-    background: root.on ? #2dd4bf : touch.has-hover && root.enabled ? #ffffff1a : transparent;
+    background: root.on ? Theme.accent : touch.has-hover && root.enabled ? #ffffff1a : transparent;
     opacity: root.enabled ? 1 : 0.4;
 
     if root.swatch != transparent: Rectangle {
@@ -45,7 +45,7 @@ component BarButton inherits Rectangle {
         viewbox-width: 24;
         viewbox-height: 24;
         commands: root.icon;
-        stroke: root.on ? #0e1116 : #e6edf3;
+        stroke: root.on ? Theme.on-accent : Theme.fg;
         stroke-width: 1.8px;
         stroke-line-cap: round;
         stroke-line-join: round;
@@ -76,9 +76,9 @@ export component AnalysisBar inherits Rectangle {
     width: column.preferred-width;
     height: column.preferred-height;
     border-radius: 12px;
-    background: #161b22eb;
+    background: Theme.panel.with-alpha(0.92);
     border-width: 1px;
-    border-color: #2a313c;
+    border-color: Theme.line-strong;
     drop-shadow-blur: 12px;
     drop-shadow-color: #00000066;
 
@@ -265,9 +265,9 @@ export component AnalysisHint inherits Rectangle {
     height: 30px;
     width: row.preferred-width;
     border-radius: 15px;
-    background: #161b22eb;
+    background: Theme.panel.with-alpha(0.92);
     border-width: 1px;
-    border-color: #2a313c;
+    border-color: Theme.line-strong;
 
     row := HorizontalLayout {
         padding-left: 14px;
@@ -285,13 +285,13 @@ export component AnalysisHint inherits Rectangle {
                 width: parent.width * Math.max(0, Math.min(1, Editor.analysis-progress));
                 height: parent.height;
                 border-radius: 2px;
-                background: #2dd4bf;
+                background: Theme.accent;
             }
         }
 
         Text {
             text: root.message;
-            color: #e6edf3;
+            color: Theme.fg;
             font-size: 12px;
             vertical-alignment: center;
         }
@@ -301,10 +301,10 @@ export component AnalysisHint inherits Rectangle {
             height: 22px;
             y: (parent.height - self.height) / 2;
             border-radius: 11px;
-            background: finish-touch.has-hover ? #5eead4 : #2dd4bf;
+            background: finish-touch.has-hover ? Theme.accent-hover : Theme.accent;
             finish-label := Text {
                 text: I18n.t("draw.finish");
-                color: #0e1116;
+                color: Theme.on-accent;
                 font-size: 12px;
                 font-weight: 600;
             }

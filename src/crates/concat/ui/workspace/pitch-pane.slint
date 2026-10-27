@@ -16,6 +16,7 @@
 // name, typed in, kept with the footage and shown on the board.
 
 import { I18n } from "../i18n.slint";
+import { Theme } from "../theme/theme.slint";
 import { Button, Field } from "../primitives/modal.slint";
 import { Select } from "../primitives/select.slint";
 import { Tip } from "../primitives/tooltip.slint";
@@ -26,12 +27,12 @@ import { PaneKind, PaneSwitcher } from "pane-switcher.slint";
 
 /// The direction's colours.
 global Night {
-    out property <color> panel: #161b22;
-    out property <color> ground: #0e1116;
-    out property <color> line: #2a313c;
-    out property <color> text: #e6edf3;
-    out property <color> muted: #8b949e;
-    out property <color> accent: #2dd4bf;
+    out property <color> panel: Theme.panel;
+    out property <color> ground: Theme.page;
+    out property <color> line: Theme.line-strong;
+    out property <color> text: Theme.fg;
+    out property <color> muted: Theme.fg-muted;
+    out property <color> accent: Theme.accent;
     out property <color> pitch: #1d3a2c;
     out property <color> stripe: #21422f;
     out property <color> marks: #ffffff80;

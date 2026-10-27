@@ -165,6 +165,7 @@
   "common.right": "Справа",
   "common.rotation": "Поворот",
   "common.saved": "сохранено",
+  "common.unsavedChanges": "unsaved changes",
   "common.scale": "Масштаб",
   "common.script": "Текст",
   "common.searchKind": "Поиск: {0}",

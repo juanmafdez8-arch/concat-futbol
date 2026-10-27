@@ -165,6 +165,7 @@
   "common.right": "Droite",
   "common.rotation": "Rotation",
   "common.saved": "enregistré",
+  "common.unsavedChanges": "unsaved changes",
   "common.scale": "Échelle",
   "common.script": "Texte",
   "common.searchKind": "Rechercher un {0}",

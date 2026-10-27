@@ -165,6 +165,7 @@
   "common.right": "오른쪽",
   "common.rotation": "회전",
   "common.saved": "저장됨",
+  "common.unsavedChanges": "unsaved changes",
   "common.scale": "크기",
   "common.script": "대본",
   "common.searchKind": "{0} 검색",

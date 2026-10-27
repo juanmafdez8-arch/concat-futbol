@@ -92,7 +92,7 @@ jobs:
         working-directory: src
         run: |
           set -o pipefail
-          cargo build --release -p concat --target x86_64-pc-windows-msvc 2>&1 | tee build.log
+          cargo build --profile app -p concat --target x86_64-pc-windows-msvc 2>&1 | tee build.log
 
       - name: Build log to the summary (failure only)
         if: failure()
@@ -108,7 +108,7 @@ jobs:
           $ErrorActionPreference = "Stop"
           $name = "Concat-Futbol-windows-x86_64"
           New-Item -ItemType Directory -Force "stage\$name" | Out-Null
-          Copy-Item "src\target\x86_64-pc-windows-msvc\release\concat.exe" "stage\$name\"
+          Copy-Item "src\target\x86_64-pc-windows-msvc\app\concat.exe" "stage\$name\"
           Copy-Item "$env:FFMPEG_DIR\bin\*.dll" "stage\$name\"
           Copy-Item "$env:SHERPA_DLL_DIR\*.dll" "stage\$name\"
           Copy-Item LICENSE, THIRD_PARTY_NOTICES.md "stage\$name\"

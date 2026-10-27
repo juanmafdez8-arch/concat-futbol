@@ -165,6 +165,7 @@
   "common.right": "右",
   "common.rotation": "回転",
   "common.saved": "保存済み",
+  "common.unsavedChanges": "unsaved changes",
   "common.scale": "スケール",
   "common.script": "原稿",
   "common.searchKind": "{0} を検索",

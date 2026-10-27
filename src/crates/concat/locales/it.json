@@ -165,6 +165,7 @@
   "common.right": "Destra",
   "common.rotation": "Rotazione",
   "common.saved": "salvato",
+  "common.unsavedChanges": "unsaved changes",
   "common.scale": "Scala",
   "common.script": "Testo",
   "common.searchKind": "Cerca {0}",

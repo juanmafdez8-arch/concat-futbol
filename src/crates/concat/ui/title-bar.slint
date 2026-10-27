@@ -212,7 +212,7 @@ export component TitleBar inherits Rectangle {
         // screen's heading already carries the name where it means something.
         // The broadcast theme is the exception: there the strip is the
         // scoreboard bar, and a bar opens on its channel's plate.
-        if Theme.broadcast && !root.minimal: Rectangle {
+        if Theme.broadcast: Rectangle {
             width: plate.preferred-width + 24px;
             background: Theme.accent;
 
@@ -227,7 +227,7 @@ export component TitleBar inherits Rectangle {
                 letter-spacing: 1.4px;
             }
         }
-        if Theme.broadcast && !root.minimal: Rectangle { width: 8px; }
+        if Theme.broadcast: Rectangle { width: 8px; }
 
         // Each label reports its own position rather than a fixed one: they
         // are sized from their text, so where "View" starts depends on how
