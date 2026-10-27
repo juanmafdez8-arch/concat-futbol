@@ -492,6 +492,66 @@ fn stretched(bbox: &[f32; 4], shape: Shape) -> [f32; 4] {
     [cx - hw, cy - hh, cx + hw, cy + hh]
 }
 
+/// A magnifier: a disc beside the thing showing it `zoom` times larger,
+/// ringed in `colour`. It sits up and to the right of the player, or to
+/// the left when that would leave the picture, so the player stays in
+/// view under it.
+pub fn lens(
+    frame: &mut Frame,
+    target: &Target<'_>,
+    mapping: &Mapping,
+    colour: [u8; 3],
+    strength: f32,
+    shape: Shape,
+) {
+    let Some((x0, y0, x1, y1)) = pixel_box(frame, &target.bbox, mapping, 0.0) else {
+        return;
+    };
+    let (fw, fh) = (frame.width() as f32, frame.height() as f32);
+    let (cx, cy) = ((x0 + x1) as f32 * 0.5, (y0 + y1) as f32 * 0.5);
+    let tall = (y1 - y0).max(1) as f32;
+    let radius = (tall * 1.1 * shape.size).clamp(fh * 0.06, fh * 0.3);
+    let zoom = 2.2 * shape.squash.max(0.25);
+    let ring = (fh / 240.0 * shape.thickness).max(1.5);
+    let mut lx = cx + tall * 0.6 + radius;
+    if lx + radius > fw {
+        lx = cx - tall * 0.6 - radius;
+    }
+    let ly = (cy - tall * 0.4 - radius * 0.6).clamp(radius, fh - radius);
+    let source = frame.clone();
+    let width = frame.width() as usize;
+    let pixels = frame.pixels_mut();
+    let strength = strength.clamp(0.0, 1.0);
+    let (ax, ay) = ((lx - radius).max(0.0) as usize, (ly - radius).max(0.0) as usize);
+    let (bx, by) = (
+        ((lx + radius + ring) as usize).min(width),
+        ((ly + radius + ring) as usize).min(source.height() as usize),
+    );
+    for y in ay..by {
+        for x in ax..bx {
+            let (dx, dy) = (x as f32 + 0.5 - lx, y as f32 + 0.5 - ly);
+            let d = dx.hypot(dy);
+            if d > radius + ring {
+                continue;
+            }
+            let at = (y * width + x) * BYTES_PER_PIXEL;
+            if d > radius {
+                for c in 0..3 {
+                    pixels[at + c] = (f32::from(pixels[at + c]) * (1.0 - strength)
+                        + f32::from(colour[c]) * strength
+                        + 0.5) as u8;
+                }
+                continue;
+            }
+            let sx = (cx + dx / zoom).clamp(0.0, fw - 1.0) as u32;
+            let sy = (cy + dy / zoom).clamp(0.0, fh - 1.0) as u32;
+            if let Some(p) = source.pixel(sx, sy) {
+                pixels[at..at + 3].copy_from_slice(&p[..3]);
+            }
+        }
+    }
+}
+
 /// Everything but the thing made transparent: the layer a moved or a
 /// pasted player is.
 pub fn isolate(frame: &mut Frame, target: &Target<'_>, mapping: &Mapping) {

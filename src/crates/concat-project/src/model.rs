@@ -538,6 +538,22 @@ pub enum MarkStyle {
     Arrow,
     /// A frame drawn round it.
     Frame,
+    /// Where it has run over the last seconds, as a fading line on the
+    /// grass ending in an arrowhead at its feet. Size is how far back.
+    Trail,
+    /// A magnifier beside it showing it larger, ringed in the colour.
+    Lens,
+    /// A line from its feet to the ball's, coloured by how near it is and
+    /// labelled in metres when the clip is calibrated.
+    Distance,
+    /// Its speed in km/h over its head, when the clip is calibrated.
+    Speed,
+    /// A line across the pitch through its feet, the way the pitch runs -
+    /// the last defender's line. Needs the clip calibrated.
+    LastLine,
+    /// The pitch's five lanes and three thirds drawn on the grass. Needs
+    /// the clip calibrated; the player it hangs on only switches it.
+    Lanes,
 }
 
 fn default_mark_colour() -> [u8; 3] {

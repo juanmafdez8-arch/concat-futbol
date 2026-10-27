@@ -358,6 +358,24 @@ pub fn map_at(calibration: &Calibration, motion: &Motion, ms: u64) -> Option<Mat
     homography(&from, &to)
 }
 
+/// The map from pitch metres to source fractions at `ms`: [`map_at`] the
+/// other way round, for drawing the pitch's own lines on the picture.
+pub fn image_map_at(calibration: &Calibration, motion: &Motion, ms: u64) -> Option<Matrix> {
+    let anchor = calibration
+        .anchors
+        .iter()
+        .filter(|anchor| anchor.pairs.len() >= 4)
+        .min_by_key(|anchor| anchor.ms.abs_diff(ms))?;
+    let mut from = Vec::new();
+    let mut to = Vec::new();
+    for pair in &anchor.pairs {
+        let carried = motion.carry((pair[0], pair[1]), anchor.ms, ms)?;
+        from.push((pair[2], pair[3]));
+        to.push(carried);
+    }
+    homography(&from, &to)
+}
+
 /// A player's feet in a frame: the middle of his box's foot.
 pub fn feet(bbox: &[f32; 4]) -> (f64, f64) {
     (f64::from(bbox[0] + bbox[2]) * 0.5, f64::from(bbox[3]))

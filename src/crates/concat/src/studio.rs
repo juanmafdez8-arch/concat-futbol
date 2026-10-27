@@ -10615,6 +10615,12 @@ Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque
             3 => model::MarkStyle::Erase,
             4 => model::MarkStyle::Isolate,
             5 => model::MarkStyle::Arrow,
+            7 => model::MarkStyle::Trail,
+            8 => model::MarkStyle::Lens,
+            9 => model::MarkStyle::Distance,
+            10 => model::MarkStyle::Speed,
+            11 => model::MarkStyle::LastLine,
+            12 => model::MarkStyle::Lanes,
             _ => model::MarkStyle::Frame,
         };
         let (Some(id), Some(track)) = (self.sole_selection(), self.football_chosen) else {
@@ -14341,6 +14347,12 @@ Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque
                 .map_or(0, |(_, anchors, _)| anchors.len() as i32),
             football_arrow: self.football_marked(clip, model::MarkStyle::Arrow),
             football_frame: self.football_marked(clip, model::MarkStyle::Frame),
+            football_trail: self.football_marked(clip, model::MarkStyle::Trail),
+            football_lens: self.football_marked(clip, model::MarkStyle::Lens),
+            football_distance: self.football_marked(clip, model::MarkStyle::Distance),
+            football_speed: self.football_marked(clip, model::MarkStyle::Speed),
+            football_last_line: self.football_marked(clip, model::MarkStyle::LastLine),
+            football_lanes: self.football_marked(clip, model::MarkStyle::Lanes),
             football_marks_here: self.football_chosen.map_or(0, |track| {
                 clip.football
                     .iter()

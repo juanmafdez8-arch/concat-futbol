@@ -20,6 +20,7 @@ concat-effects.workspace = true
 # Masks for cutouts: read from the project's cache and applied to a decoded
 # frame before it is placed. Reading only; the host finds them.
 concat-vision.workspace = true
+concat-text.workspace = true
 serde = { version = "1", features = ["derive"] }
 log = "0.4"
 

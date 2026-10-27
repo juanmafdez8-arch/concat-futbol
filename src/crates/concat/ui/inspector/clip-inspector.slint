@@ -1591,6 +1591,61 @@ export component VideoPanel inherits VerticalLayout {
                 }
             }
 
+            // The marks that read the pitch: a run's trail, a magnifier,
+            // the distance to the ball, the speed, the last defender's line
+            // and the lanes. The last four want the clip calibrated.
+            if root.selected.football-analysed && root.selected.football-chosen >= 0: HorizontalLayout {
+                padding-left: Theme.pad;
+                padding-right: Theme.pad;
+                spacing: 6px;
+
+                ToolButton {
+                    glyph: Glyph.chevron-down;
+                    label: I18n.t("football.trail");
+                    checked: root.selected.football-trail;
+                    clicked => { root.football-mark(7); }
+                }
+
+                ToolButton {
+                    glyph: Glyph.frame;
+                    label: I18n.t("football.lens");
+                    checked: root.selected.football-lens;
+                    clicked => { root.football-mark(8); }
+                }
+
+                ToolButton {
+                    glyph: Glyph.brush;
+                    label: I18n.t("football.distance");
+                    checked: root.selected.football-distance;
+                    clicked => { root.football-mark(9); }
+                }
+
+                ToolButton {
+                    glyph: Glyph.brush;
+                    label: I18n.t("football.speed");
+                    checked: root.selected.football-speed;
+                    clicked => { root.football-mark(10); }
+                }
+
+                ToolButton {
+                    glyph: Glyph.brush;
+                    label: I18n.t("football.lastLine");
+                    checked: root.selected.football-last-line;
+                    clicked => { root.football-mark(11); }
+                }
+
+                ToolButton {
+                    glyph: Glyph.frame;
+                    label: I18n.t("football.lanes");
+                    checked: root.selected.football-lanes;
+                    clicked => { root.football-mark(12); }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+            }
+
             if root.selected.football-analysed && root.selected.football-marks-here > 0: Param {
                 label: I18n.t("football.size");
                 value: root.selected.football-size;
