@@ -154,6 +154,16 @@ fn quiet_missing_drives() {
 /// Builds the window, binds it to the engine, and runs it until it closes.
 pub fn run() -> Result<(), slint::PlatformError> {
     quiet_missing_drives();
+    // Which video codecs export can write here is found by opening each
+    // hardware encoder once, a second or two in all. Asked on a worker now,
+    // while the window is being built, so the first frame does not wait on
+    // it; the answers are kept for the process, and a pane that asks before
+    // they are in waits only for what is left.
+    std::thread::spawn(|| {
+        for codec in concat_media::VideoCodec::ALL.iter() {
+            let _ = (*codec).encodable();
+        }
+    });
     // The shell doesn't exist yet - it needs the window the backend is about
     // to help create - but `Shell::with` is a no-op until `Shell::install`
     // runs, and by the time an OS drop can actually happen, it has. Import
