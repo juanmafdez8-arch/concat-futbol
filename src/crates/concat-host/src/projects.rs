@@ -260,12 +260,39 @@ pub fn remember(config: &Path, project: &ProjectInfo) -> Result<(), String> {
 ///
 /// Filtering on read rather than pruning on write means a project on a drive
 /// that happens to be unplugged comes back when the drive does.
+///
+/// Each folder is looked at on a thread of its own, and one that has not
+/// answered by [`LOOK_LIMIT`] counts as gone: a dying disk can leave its
+/// drive mounted while every read on it blocks for good, and the launch
+/// screen must not wait on it. A thread stuck that way is left behind.
 pub fn list(config: &Path) -> Vec<ProjectInfo> {
-    read_recents(config)
+    let entries = read_recents(config);
+    let (sender, answers) = std::sync::mpsc::channel();
+    for (index, entry) in entries.iter().enumerate() {
+        let sender = sender.clone();
+        let root = PathBuf::from(&entry.path);
+        std::thread::spawn(move || {
+            let _ = sender.send((index, is_project(&root)));
+        });
+    }
+    drop(sender);
+    let deadline = std::time::Instant::now() + LOOK_LIMIT;
+    let mut present = vec![false; entries.len()];
+    while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {
+        match answers.recv_timeout(left) {
+            Ok((index, found)) => present[index] = found,
+            Err(_) => break,
+        }
+    }
+    entries
         .into_iter()
-        .filter(|entry| is_project(Path::new(&entry.path)))
+        .zip(present)
+        .filter_map(|(entry, found)| found.then_some(entry))
         .collect()
 }
+
+/// How long the recents list waits for a project folder to answer.
+const LOOK_LIMIT: std::time::Duration = std::time::Duration::from_millis(1500);
 
 /// Removes one project from the list. The folder itself is left alone.
 pub fn forget(config: &Path, path: &str) -> Result<(), String> {
