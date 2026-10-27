@@ -130,8 +130,30 @@ pub fn report_startup_failure(error: &slint::PlatformError) {
     platform::report_startup_failure(&error);
 }
 
+/// Asks Windows not to stop the process with a "no disk in the drive"
+/// box when a path on a drive that is gone - an unplugged USB disk, a
+/// card reader with nothing in it - is touched. The box is modal and the
+/// window is not up yet, so a recent project or a media file on such a
+/// drive hung the start for good; with the box off, the touch just fails
+/// and the project is shown as missing.
+fn quiet_missing_drives() {
+    #[cfg(target_os = "windows")]
+    {
+        unsafe extern "system" {
+            fn SetErrorMode(mode: u32) -> u32;
+        }
+        const SEM_FAILCRITICALERRORS: u32 = 0x0001;
+        const SEM_NOOPENFILEERRORBOX: u32 = 0x8000;
+        // SAFETY: SetErrorMode only sets the process's error mode flags.
+        unsafe {
+            SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
+        }
+    }
+}
+
 /// Builds the window, binds it to the engine, and runs it until it closes.
 pub fn run() -> Result<(), slint::PlatformError> {
+    quiet_missing_drives();
     // The shell doesn't exist yet - it needs the window the backend is about
     // to help create - but `Shell::with` is a no-op until `Shell::install`
     // runs, and by the time an OS drop can actually happen, it has. Import
