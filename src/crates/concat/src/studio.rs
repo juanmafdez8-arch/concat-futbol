@@ -5536,12 +5536,25 @@ impl Studio {
     pub fn stage_dragged(&mut self, x: f32, y: f32, snap: bool) {
         let mut gesture = std::mem::replace(&mut self.gesture, Gesture::None);
         if let Gesture::Draw {
-            anchors, screen, ..
+            clip,
+            anchors,
+            screen,
         } = &mut gesture
         {
             if let (Some(end), Some(last)) = (anchors.last_mut(), screen.last_mut()) {
-                *last = (x, y);
-                end.track = None;
+                // The end follows the pointer, already on the feet of the
+                // player it is over, as it will land.
+                match self.clip(clip).cloned() {
+                    Some(target) => {
+                        let anchor = self.anchor_at(&target, x, y);
+                        *last = self.anchor_on_stage(&target, &anchor, x, y);
+                        *end = anchor;
+                    }
+                    None => {
+                        *last = (x, y);
+                        end.track = None;
+                    }
+                }
             }
             self.gesture = gesture;
             self.request_preview();
@@ -6111,13 +6124,37 @@ impl Studio {
     }
 
     /// The point a stage press lands on, as a drawing keeps it: on the
-    /// feet of the tracked player under it when there is one.
+    /// feet of the player the press is on, when it is on one, and where
+    /// it fell otherwise. Only a press inside a player's box (a little
+    /// grown) takes her - not the nearest one within reach, which on a
+    /// crowded picture was often somebody else, or the ball - and the
+    /// ball only when the press is on it.
     fn anchor_at(&self, clip: &Clip, x: f32, y: f32) -> model::Anchor {
+        use concat_vision::football::{Kind, area, grown};
         let at = self.stage_to_source(clip, f64::from(x), f64::from(y));
+        let (u, v) = (at[0] as f32, at[1] as f32);
         let tracked = self
             .football_request(&clip.id)
             .and_then(|request| concat_vision::football::shared(&request.dir()))
-            .and_then(|set| set.pick(self.source_at_playhead(clip), at[0] as f32, at[1] as f32));
+            .and_then(|set| {
+                let boxes = set.at(self.source_at_playhead(clip));
+                let under = |tracked: &&concat_vision::football::TrackedBox| {
+                    let [l, t, r, b] = grown(&tracked.bbox, 0.1);
+                    (l..=r).contains(&u) && (t..=b).contains(&v)
+                };
+                boxes
+                    .iter()
+                    .filter(|tracked| tracked.kind != Kind::Ball)
+                    .filter(under)
+                    .min_by(|a, b| area(&a.bbox).total_cmp(&area(&b.bbox)))
+                    .or_else(|| {
+                        boxes
+                            .iter()
+                            .filter(|tracked| tracked.kind == Kind::Ball)
+                            .find(under)
+                    })
+                    .copied()
+            });
         match tracked {
             Some(tracked) => {
                 let [l, _, r, b] = tracked.bbox;
@@ -6139,6 +6176,9 @@ impl Studio {
         };
         let kind = Self::DRAW_KINDS[self.draw_tool.unwrap_or(0)];
         let anchor = self.anchor_at(&clip, x, y);
+        // The draft is drawn where the point will be: on a player's feet
+        // when it took one, so the line does not jump when it is done.
+        let (x, y) = self.anchor_on_stage(&clip, &anchor, x, y);
         match kind {
             model::DrawKind::Zone | model::DrawKind::Link => {
                 let draft = self
@@ -11456,6 +11496,36 @@ Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque
             .into_iter()
             .any(|shown| shown.id == clip.id)
             .then(|| clip.clone())
+    }
+
+    /// Where a drawing's point shows on the stage: a player's feet taken
+    /// back through the clip's crop, flips and footprint, or the press
+    /// `(x, y)` itself for a free point.
+    fn anchor_on_stage(&self, clip: &Clip, anchor: &model::Anchor, x: f32, y: f32) -> (f32, f32) {
+        if anchor.track.is_none() {
+            return (x, y);
+        }
+        let [u, v] = anchor.at;
+        let footprint = self.footprint(clip);
+        let (width, height) = self.output_size();
+        let (width, height) = (f64::from(width.max(1)), f64::from(height.max(1)));
+        let [left, top, right, bottom] = clip
+            .crop
+            .map(|crop| [crop.left, crop.top, crop.right, crop.bottom])
+            .unwrap_or([0.0; 4]);
+        let px = (u - left) / (1.0 - left - right).max(1e-6);
+        let py = (v - top) / (1.0 - top - bottom).max(1e-6);
+        let px = if clip.flip_h { 1.0 - px } else { px };
+        let py = if clip.flip_v { 1.0 - py } else { py };
+        let along = (px - 0.5) * footprint.w * width;
+        let down = (py - 0.5) * footprint.h * height;
+        let (sin, cos) = footprint.rotation.to_radians().sin_cos();
+        let dx = along * cos - down * sin;
+        let dy = along * sin + down * cos;
+        (
+            (footprint.cx + dx / width) as f32,
+            (footprint.cy + dy / height) as f32,
+        )
     }
 
     /// Where a stage point lands in the source picture, in the fractions a
