@@ -8493,7 +8493,7 @@ Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque
             ),
             tool(
                 "importar_biblioteca",
-                "Importa los vídeos de la biblioteca de referencias (carpetas «Así sí» / «Así no» de cada acción en D:\\Concat Futbol\\02 Referencias) en una línea de tiempo nueva, ya etiquetados.",
+                "Importa los vídeos de la biblioteca de referencias (carpetas «Así sí» / «Así no» de cada acción en E:\\Concat Futbol\\02 Referencias) en una línea de tiempo nueva, ya etiquetados.",
                 none.clone(),
             ),
             tool(
