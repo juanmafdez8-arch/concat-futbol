@@ -7766,7 +7766,7 @@ impl Studio {
         self.library_root()
             .parent()
             .map(|work| work.join("05 Exportaciones"))
-            .unwrap_or_else(|| std::path::PathBuf::from(r"D:\Concat Futbol\05 Exportaciones"))
+            .unwrap_or_else(|| std::path::PathBuf::from(r"E:\Concat Futbol\05 Exportaciones"))
     }
 
     /// Today as the report names it, from the clock alone.
@@ -7956,7 +7956,7 @@ impl Studio {
             .map(strip)
             .and_then(|model| model.parent().map(|work| work.join("02 Referencias")))
             .filter(|root| root.is_dir())
-            .unwrap_or_else(|| std::path::PathBuf::from(r"D:\Concat Futbol\02 Referencias"))
+            .unwrap_or_else(|| std::path::PathBuf::from(r"E:\Concat Futbol\02 Referencias"))
     }
 
     /// The action a library folder names: one of the four, matched loosely
