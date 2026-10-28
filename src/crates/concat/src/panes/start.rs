@@ -86,6 +86,22 @@ impl Default for StartPane {
     }
 }
 
+/// The football library's projects folder, when the library is set up:
+/// the folder beside the game-model folder the app reads its references
+/// from (`<config>/football`, a link into the library), named "04
+/// Proyectos Concat". New projects then live with the footage and the
+/// results, on whatever drive the library is on.
+fn library_projects() -> Option<String> {
+    let model = concat_host::AppDirs::locate().ok()?.config.join("football");
+    let model = std::fs::canonicalize(model).ok()?;
+    let text = model.to_string_lossy().into_owned();
+    let model = std::path::PathBuf::from(text.strip_prefix(r"\\?\").unwrap_or(&text).to_string());
+    let folder = model.parent()?.join("04 Proyectos Concat");
+    folder
+        .is_dir()
+        .then(|| folder.to_string_lossy().into_owned())
+}
+
 /// Where a new project goes unless told otherwise: a Concat folder on the
 /// desktop. The desktop the system names, not `~/Desktop`: on Windows
 /// OneDrive often moves it, and on Linux it is called what the desktop's
@@ -94,6 +110,9 @@ impl Default for StartPane {
 fn default_location() -> String {
     if cfg!(target_os = "android") {
         return home_folder("Concat");
+    }
+    if let Some(library) = library_projects() {
+        return library;
     }
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     if let Some(desktop) = dirs::desktop_dir() {
