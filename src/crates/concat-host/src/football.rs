@@ -352,7 +352,9 @@ impl Footballs {
             .at_rate(FrameRate::new(Rational::new((1000 / STEP_MS) as i64, 1)))
             .limited_to(count as u64);
         let path = request.media_path.clone();
-        let (sender, receiver) = std::sync::mpsc::sync_channel::<Result<concat_core::frame::Frame, String>>(4);
+        let (sender, receiver) = std::sync::mpsc::sync_channel::<
+            Result<(concat_core::frame::Frame, concat_vision::football::detect::Prepared), String>,
+        >(4);
         let mut out = Vec::with_capacity(count);
         let mut shirts = Vec::with_capacity(count);
         let mut failure: Option<String> = None;
@@ -368,7 +370,10 @@ impl Footballs {
                 loop {
                     match decoder.next_frame() {
                         Ok(Some(frame)) => {
-                            if sender.send(Ok(frame)).is_err() {
+                            // The detector's picture made here, while the
+                            // last frame is on the GPU.
+                            let prepared = detectors.prepare(&frame);
+                            if sender.send(Ok((frame, prepared))).is_err() {
                                 return;
                             }
                         }
@@ -385,8 +390,8 @@ impl Footballs {
                     failure = Some("football analysis cancelled".to_owned());
                     break;
                 }
-                let frame = match receiver.recv() {
-                    Ok(Ok(frame)) => frame,
+                let (frame, prepared) = match receiver.recv() {
+                    Ok(Ok(both)) => both,
                     Ok(Err(error)) => {
                         failure = Some(error);
                         break;
@@ -394,7 +399,7 @@ impl Footballs {
                     // The file ran out before its stated length.
                     Err(_) => break,
                 };
-                match detectors.detect(&frame) {
+                match detectors.detect_prepared(&prepared) {
                     Ok(found) => {
                         let ms = first_ms + index as u64 * STEP_MS;
                         // The shirts while the frame is here: what the

@@ -40,6 +40,15 @@ const BALL_SCORE: f32 = 0.08;
 /// Two boxes of one kind overlapping this much are one thing.
 const NMS_IOU: f32 = 0.5;
 
+/// A frame as a detector's input tensor, with the size of the picture in
+/// it: see [`Detector::prepare`].
+pub struct Prepared {
+    data: Vec<f32>,
+    w: usize,
+    h: usize,
+    size: usize,
+}
+
 /// One YOLO model, loaded.
 pub struct Detector {
     model: Mutex<Model>,
@@ -79,14 +88,16 @@ impl Detector {
         fit(self.size, width, height)
     }
 
-    /// The things in `frame`, which should be [`Detector::input_size`].
-    pub fn detect(&self, frame: &Frame) -> Result<Vec<Detection>, String> {
+    /// The picture a detector of this size reads `frame` as: fitted into
+    /// the top-left of its square, the rest padded, planar and scaled to
+    /// `0..=1`. Made once per frame and handed to both models, and made on
+    /// the decoder's thread while the last frame is being detected.
+    pub fn prepare(&self, frame: &Frame) -> Prepared {
         let size = self.size;
         let (fw, fh) = (frame.width() as usize, frame.height() as usize);
         if fw == 0 || fh == 0 {
-            return Ok(Vec::new());
+            return Prepared { data: Vec::new(), w: 0, h: 0, size };
         }
-        // The picture fitted into the top-left of the square, the rest pad.
         let (w, h) = fit(size, fw as u32, fh as u32);
         let (w, h) = (w as usize, h as usize);
         let pixels = frame.pixels();
@@ -101,6 +112,26 @@ impl Detector {
                 }
             }
         }
+        Prepared { data, w, h, size }
+    }
+
+    /// The things in `frame`, which should be [`Detector::input_size`].
+    pub fn detect(&self, frame: &Frame) -> Result<Vec<Detection>, String> {
+        self.detect_prepared(&self.prepare(frame))
+    }
+
+    /// The things in a picture already [`Detector::prepare`]d.
+    pub fn detect_prepared(&self, prepared: &Prepared) -> Result<Vec<Detection>, String> {
+        let size = self.size;
+        let (w, h) = (prepared.w, prepared.h);
+        if w == 0 || h == 0 {
+            return Ok(Vec::new());
+        }
+        let data = if prepared.size == size {
+            prepared.data.clone()
+        } else {
+            return Err("football detector: a picture prepared for another size".to_owned());
+        };
         let outputs = self
             .model
             .lock()
@@ -199,25 +230,36 @@ impl Detectors {
         self.people.input_size(width, height)
     }
 
+    /// The picture both models read `frame` as; see [`Detector::prepare`].
+    pub fn prepare(&self, frame: &Frame) -> Prepared {
+        self.people.prepare(frame)
+    }
+
     /// Everything both models find in `frame`.
+    pub fn detect(&self, frame: &Frame) -> Result<Vec<Detection>, String> {
+        self.detect_prepared(&self.prepare(frame))
+    }
+
+    /// Everything both models find in a prepared picture.
     /// The general model is asked only when the football model has not
     /// seen the ball surely: it costs as much as the football model again,
-    /// and most frames do not need it.
-    pub fn detect(&self, frame: &Frame) -> Result<Vec<Detection>, String> {
+    /// and most frames do not need it. Both read the one picture.
+    pub fn detect_prepared(&self, prepared: &Prepared) -> Result<Vec<Detection>, String> {
         /// A ball the football model is this sure of needs no second look.
         const SURE_BALL: f32 = 0.3;
-        let mut found = self.people.detect(frame)?;
+        let mut found = self.people.detect_prepared(prepared)?;
         let sure = found
             .iter()
             .any(|detection| detection.kind == Kind::Ball && detection.score >= SURE_BALL);
         if let Some(ball) = &self.ball
             && !sure
         {
-            found.extend(ball.detect(frame)?);
+            found.extend(ball.detect_prepared(prepared)?);
             found = suppress(found);
         }
         Ok(found)
     }
+
 }
 
 /// The long edge of `width` × `height` fitted to `size`.
