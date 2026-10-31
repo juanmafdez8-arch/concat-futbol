@@ -308,6 +308,9 @@ impl Footballs {
         if to <= from {
             return Ok(0);
         }
+        // The stretches themselves, joined where they touch: not everything
+        // from the first to the last.
+        let spans = merged(request.ranges.clone());
         let dir = request.dir();
         let before = TrackSet::load(&dir);
         let (width, height) = request.media_size;
@@ -340,7 +343,6 @@ impl Footballs {
                 )
             })
         });
-        let spans = merged(request.ranges.clone());
         let total: f64 = spans.iter().map(|(a, b)| b - a).sum::<f64>().max(1e-6);
         let mut done = 0.0;
         let mut frames: Vec<(u64, Vec<concat_vision::football::Detection>)> = Vec::new();
