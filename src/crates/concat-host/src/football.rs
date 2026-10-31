@@ -193,6 +193,9 @@ pub struct Footballs {
     gate: Arc<SingleFlight>,
     data: PathBuf,
     detectors: Mutex<Option<Arc<Detectors>>>,
+    /// A second copy of the models, so two frames are detected at once:
+    /// the GPU sat half idle while one copy's answers were read back.
+    spare: Mutex<Option<Arc<Detectors>>>,
     brushes: Arc<Brushes>,
 }
 
@@ -204,6 +207,7 @@ impl Footballs {
             gate: Arc::new(SingleFlight::new()),
             data: data.to_path_buf(),
             detectors: Mutex::new(None),
+            spare: Mutex::new(None),
             brushes,
         }
     }
@@ -249,6 +253,26 @@ impl Footballs {
         let loaded = Arc::new(Detectors::load(&people, general.as_deref(), DETECT_SIZE)?);
         *slot = Some(Arc::clone(&loaded));
         Ok(loaded)
+    }
+
+    /// The second copy of the models, loaded the first time it is asked
+    /// for; `None` when it will not load, and the analysis then runs on
+    /// the one copy as before.
+    fn spare_detectors(&self) -> Option<Arc<Detectors>> {
+        let mut slot = self.spare.lock().ok()?;
+        if let Some(loaded) = slot.as_ref() {
+            return Some(Arc::clone(loaded));
+        }
+        let dir = Self::models_dir(&self.data);
+        let people = dir.join("football.onnx");
+        if !people.is_file() {
+            return None;
+        }
+        let general = dir.join("general.onnx");
+        let general = general.is_file().then_some(general);
+        let loaded = Arc::new(Detectors::load(&people, general.as_deref(), DETECT_SIZE).ok()?);
+        *slot = Some(Arc::clone(&loaded));
+        Some(loaded)
     }
 
     /// Finds and tracks the players and the ball over the stretch of
@@ -404,12 +428,20 @@ impl Footballs {
             .at_rate(FrameRate::new(Rational::new((1000 / STEP_MS) as i64, 1)))
             .limited_to(count as u64);
         let path = request.media_path.clone();
-        let (sender, receiver) = std::sync::mpsc::sync_channel::<
-            Result<(concat_core::frame::Frame, concat_vision::football::detect::Prepared), String>,
-        >(4);
+        type Prepared = concat_vision::football::detect::Prepared;
+        type Found = (Vec<concat_vision::football::Detection>, Seen);
+        let (sender, receiver) =
+            std::sync::mpsc::sync_channel::<Result<(usize, concat_core::frame::Frame, Prepared), String>>(4);
         let mut out = Vec::with_capacity(count);
         let mut shirts = Vec::with_capacity(count);
         let mut failure: Option<String> = None;
+        // Two copies of the models when the second loads, each taking the
+        // next decoded frame as it comes free.
+        let spare = self.spare_detectors();
+        let workers: Vec<&Detectors> = std::iter::once(detectors).chain(spare.as_deref()).collect();
+        let frames_in = Mutex::new(Some(receiver));
+        let (done, answers) = std::sync::mpsc::channel::<(usize, Result<Found, String>)>();
+        let mut slots: Vec<Option<Found>> = (0..count).map(|_| None).collect();
         std::thread::scope(|scope| {
             scope.spawn(move || {
                 let mut decoder = match Decoder::open(&path, &options) {
@@ -419,15 +451,17 @@ impl Footballs {
                         return;
                     }
                 };
+                let mut index = 0;
                 loop {
                     match decoder.next_frame() {
                         Ok(Some(frame)) => {
                             // The detector's picture made here, while the
-                            // last frame is on the GPU.
+                            // last frames are on the GPU.
                             let prepared = detectors.prepare(&frame);
-                            if sender.send(Ok((frame, prepared))).is_err() {
+                            if sender.send(Ok((index, frame, prepared))).is_err() {
                                 return;
                             }
+                            index += 1;
                         }
                         Ok(None) => return,
                         Err(error) => {
@@ -437,47 +471,84 @@ impl Footballs {
                     }
                 }
             });
-            for index in 0..count {
+            for worker in &workers {
+                let worker: &Detectors = worker;
+                let done = done.clone();
+                let frames_in = &frames_in;
+                scope.spawn(move || {
+                    loop {
+                        let next = match frames_in.lock() {
+                            Ok(slot) => match slot.as_ref() {
+                                Some(frames) => frames.recv(),
+                                None => return,
+                            },
+                            Err(_) => return,
+                        };
+                        let (index, frame, prepared) = match next {
+                            Ok(Ok(three)) => three,
+                            Ok(Err(error)) => {
+                                let _ = done.send((usize::MAX, Err(error)));
+                                return;
+                            }
+                            Err(_) => return,
+                        };
+                        let answer = worker.detect_prepared(&prepared).map(|found| {
+                            // The shirts while the frame is here: what the
+                            // teams are told apart by after the linking.
+                            let seen: Seen = found
+                                .iter()
+                                .filter(|detection| pitch::in_teams(detection.kind))
+                                .filter_map(|detection| {
+                                    pitch::shirt_colour(&frame, &detection.bbox)
+                                        .map(|colour| (detection.bbox, colour))
+                                })
+                                .collect();
+                            (found, seen)
+                        });
+                        if done.send((index, answer)).is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+            drop(done);
+            let mut received = 0;
+            while received < count {
                 if job.cancelled() {
                     failure = Some("football analysis cancelled".to_owned());
                     break;
                 }
-                let (frame, prepared) = match receiver.recv() {
-                    Ok(Ok(both)) => both,
-                    Ok(Err(error)) => {
+                match answers.recv() {
+                    Ok((index, Ok(found))) => {
+                        if let Some(slot) = slots.get_mut(index) {
+                            *slot = Some(found);
+                        }
+                        received += 1;
+                        progress(received as f32 / count as f32);
+                    }
+                    Ok((_, Err(error))) => {
                         failure = Some(error);
                         break;
                     }
-                    // The file ran out before its stated length.
+                    // Every worker is done: the file ran out early.
                     Err(_) => break,
-                };
-                match detectors.detect_prepared(&prepared) {
-                    Ok(found) => {
-                        let ms = first_ms + index as u64 * STEP_MS;
-                        // The shirts while the frame is here: what the
-                        // teams are told apart by after the linking.
-                        let seen: Vec<([f32; 4], [u8; 3])> = found
-                            .iter()
-                            .filter(|detection| pitch::in_teams(detection.kind))
-                            .filter_map(|detection| {
-                                pitch::shirt_colour(&frame, &detection.bbox)
-                                    .map(|colour| (detection.bbox, colour))
-                            })
-                            .collect();
-                        shirts.push((ms, seen));
-                        out.push((ms, found));
-                    }
-                    Err(error) => {
-                        failure = Some(error);
-                        break;
-                    }
                 }
-                progress((index + 1) as f32 / count as f32);
             }
-            // Dropping the receiver ends the decoder's thread at its next
-            // send, so the scope is never left waiting on a full channel.
-            drop(receiver);
+            // Letting the frames go ends the decoder at its next send and
+            // the workers at their next read, so the scope never waits on
+            // a full channel.
+            drop(answers);
+            if let Ok(mut slot) = frames_in.lock() {
+                slot.take();
+            }
         });
+        for (index, slot) in slots.into_iter().enumerate() {
+            if let Some((found, seen)) = slot {
+                let ms = first_ms + index as u64 * STEP_MS;
+                shirts.push((ms, seen));
+                out.push((ms, found));
+            }
+        }
         match failure {
             Some(error) => Err(error),
             None => Ok((out, shirts)),
