@@ -49,6 +49,25 @@ const STEP_MS: u64 = 200;
 const WINDOW_BEFORE: f64 = 4.0;
 const WINDOW_AFTER: f64 = 16.0;
 
+/// How much before and after a tagged play is analysed with it, in seconds.
+const PLAY_BEFORE: f64 = 5.0;
+const PLAY_AFTER: f64 = 3.0;
+
+/// Stretches sorted and joined where they touch or overlap, so a second
+/// is never analysed twice.
+fn merged(mut ranges: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
+    ranges.retain(|(a, b)| b > a);
+    ranges.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut out: Vec<(f64, f64)> = Vec::new();
+    for (a, b) in ranges {
+        match out.last_mut() {
+            Some(last) if a <= last.1 + 0.5 => last.1 = last.1.max(b),
+            _ => out.push((a.max(0.0), b)),
+        }
+    }
+    out
+}
+
 /// One analysed instant's detections.
 type Detections = (u64, Vec<concat_vision::football::Detection>);
 /// Each outfield player's box and shirt colour at one instant.
@@ -97,7 +116,8 @@ pub struct FootballRequest {
     pub media_path: String,
     /// The media's picture size.
     pub media_size: (u32, u32),
-    /// The stretches of source, in seconds, that clips show.
+    /// The stretches of source, in seconds, to analyse: what the clips
+    /// show, or only the tagged plays over them when there are any.
     pub ranges: Vec<(f64, f64)>,
 }
 
@@ -120,12 +140,15 @@ impl FootballRequest {
             return None;
         }
         let media = project.media_by_id(&clip.media_id)?;
+        let timeline = project.active();
         // Every clip of the same file, so one analysis serves them all.
-        let ranges = project
-            .active()
+        let shown: Vec<_> = timeline
             .clips
             .iter()
             .filter(|other| other.media_id == media.id)
+            .collect();
+        let whole: Vec<(f64, f64)> = shown
+            .iter()
             .map(|other| {
                 (
                     other.source_start,
@@ -133,6 +156,29 @@ impl FootballRequest {
                 )
             })
             .collect();
+        // With plays tagged over the file, only they are analysed - a few
+        // seconds either side, for how each began and ended - in place of
+        // the whole match: the evaluation, the report and the marks on a
+        // play need nothing else, and a match is mostly not plays.
+        let plays: Vec<(f64, f64)> = timeline
+            .plays
+            .iter()
+            .flat_map(|play| {
+                let (from, to) = (play.start - PLAY_BEFORE, play.end + PLAY_AFTER);
+                shown.iter().filter_map(move |other| {
+                    let (start, end) = (other.start, other.start + other.duration);
+                    let (a, b) = (from.max(start), to.min(end));
+                    (b > a).then(|| {
+                        let speed = other.speed.max(0.0625);
+                        (
+                            other.source_start + (a - start) * speed,
+                            other.source_start + (b - start) * speed,
+                        )
+                    })
+                })
+            })
+            .collect();
+        let ranges = merged(if plays.is_empty() { whole } else { plays });
         Some(FootballRequest {
             project: project_dir.to_path_buf(),
             media_path: media.path.clone(),
@@ -258,17 +304,20 @@ impl Footballs {
             .save(&dir)
         };
 
-        // The window round the focus, when the stretch is long enough for
-        // it to matter: written as soon as it is found.
-        let window = focus
-            .filter(|_| to - from > WINDOW_BEFORE + WINDOW_AFTER + 10.0)
-            .map(|focus| {
+        // The window round the focus, inside the stretch it falls in, when
+        // that stretch is long enough for it to matter: written as soon as
+        // it is found.
+        let window = focus.and_then(|focus| {
+            let (span_from, span_to) = *spans.iter().find(|(a, b)| *a <= focus && focus <= *b)?;
+            (span_to - span_from > WINDOW_BEFORE + WINDOW_AFTER + 10.0).then(|| {
                 (
-                    (focus - WINDOW_BEFORE).max(from),
-                    (focus + WINDOW_AFTER).min(to),
+                    (focus - WINDOW_BEFORE).max(span_from),
+                    (focus + WINDOW_AFTER).min(span_to),
                 )
-            });
-        let total = to - from;
+            })
+        });
+        let spans = merged(request.ranges.clone());
+        let total: f64 = spans.iter().map(|(a, b)| b - a).sum::<f64>().max(1e-6);
         let mut done = 0.0;
         let mut frames: Vec<(u64, Vec<concat_vision::football::Detection>)> = Vec::new();
         let mut shirts: Vec<Shirts> = Vec::new();
@@ -289,14 +338,17 @@ impl Footballs {
             on_window();
         }
 
-        // The rest: before the window and after it, or all of it.
-        let rest: Vec<(f64, f64)> = match window {
-            Some((window_from, window_to)) => [(from, window_from), (window_to, to)]
-                .into_iter()
-                .filter(|(a, b)| b - a > 0.05)
-                .collect(),
-            None => vec![(from, to)],
-        };
+        // The rest: every stretch, less the window.
+        let rest: Vec<(f64, f64)> = spans
+            .iter()
+            .flat_map(|&(a, b)| match window {
+                Some((window_from, window_to)) if window_from < b && a < window_to => {
+                    vec![(a, window_from.max(a)), (window_to.min(b), b)]
+                }
+                _ => vec![(a, b)],
+            })
+            .filter(|(a, b)| b - a > 0.05)
+            .collect();
         for (span_from, span_to) in rest {
             let span = span_to - span_from;
             let base = done;
