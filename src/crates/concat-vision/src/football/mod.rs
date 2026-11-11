@@ -28,6 +28,7 @@ pub mod eval;
 pub mod learn;
 pub mod marks;
 pub mod pitch;
+pub mod read;
 pub mod report;
 pub mod track;
 

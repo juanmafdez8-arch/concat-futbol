@@ -8385,6 +8385,8 @@ Qué herramienta usar:
 - «evalúa», «analiza el partido», «cómo lo hicimos» → `evaluar` (antes `configurar` si dicen perfil o equipo).
 - Preguntas por un grupo de jugadas («qué presiones salieron mal», «cuáles salidas de balón fueron bien», «cuántas…») → `listar_jugadas` con `accion` y `veredicto`. Nunca uses `evaluar_jugada` para un grupo.
 - Solo cuando nombran una jugada concreta por su id (p3, p12…): «por qué la p3…», «qué falló en la p3» → `evaluar_jugada` con ese id.
+- «qué está pasando», «qué ves aquí», «cómo estamos colocadas», «explícame la jugada» → `leer_juego` (el instante del cabezal o un tramo) o `leer_jugada` (por id). Interpreta tú los números como un analista: nombra la fase, dónde está el balón, si el bloque está junto o partido (más de 35 m de largo o más de 15 m entre líneas es partido), la altura de la línea, quién tiene superioridad cerca del balón y qué decisión o ajuste lo explica. Si la visibilidad es baja, dilo y no concluyas de más.
+- Para explicar por qué una jugada salió bien o mal, combina `leer_jugada` (qué pasó) con su veredicto (qué pedía el modelo de juego).
 - «la pN está bien/mal hecha», «guárdala como ejemplo» → `marcar_referencia`.
 - «sube/baja la exigencia», «el bloque no puede medir más de…» → `cambiar_umbral`; las claves de KPI válidas son: block_length (longitud o largo del bloque, lo que «mide» el bloque de delante a atrás, m), width (anchura del equipo de banda a banda, m), def_line_height (altura de la línea defensiva, m), line_gap (distancia entre líneas, m), shift_follow (seguimiento lateral, 0-1), pressers_3s (jugadores presionando a los 3 s), nearest_2s (distancia del más cercano a los 2 s, m), regain_s (segundos en recuperar), behind_ball_5s (jugadores por detrás del balón a los 5 s), reorganise_s (segundos en reorganizarse), support_15m (apoyos a 15 m), superiority_zone (superioridad cerca del balón), progress_m (metros progresados).
 - En `cambiar_umbral` no toques `eliminatoria` salvo que lo pidan expresamente.
@@ -8440,6 +8442,18 @@ Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque
             tool(
                 "ir_a_jugada",
                 "Selecciona una jugada y lleva el cabezal a su inicio.",
+                json!({"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}),
+            ),
+            tool(
+                "leer_juego",
+                "Lee qué está pasando en un instante, medido con el tracking y el campo calibrado: fase (ataque organizado, transición ofensiva, defensa organizada, transición defensiva), zona del balón (tercio y carril), forma de cada equipo (largo, ancho, altura de la línea defensiva, distancia entre líneas, jugadoras cerca y por detrás del balón) y superioridad junto al balón. Sin `segundo`, el instante del cabezal; con `hasta`, describe el tramo entero y sus momentos clave (pérdidas, recuperaciones, entradas al último tercio y al área).",
+                json!({"type": "object", "properties": {
+                "segundo": {"type": "number", "description": "Segundo de la línea de tiempo; por defecto el cabezal"},
+                "hasta": {"type": "number", "description": "Fin del tramo, en segundos de la línea de tiempo"}}}),
+            ),
+            tool(
+                "leer_jugada",
+                "Lee una jugada concreta por su id: fases, forma media con y sin balón y momentos clave, medidos con el tracking. Úsala antes de explicar qué pasó en una jugada.",
                 json!({"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}),
             ),
             tool(
@@ -8714,6 +8728,29 @@ Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque
                     }
                     _ => format!("No existe la jugada {id}"),
                 }
+            }
+            "leer_juego" => {
+                let at = input.get("segundo").and_then(|v| v.as_f64()).unwrap_or(f64::from(self.playhead));
+                let to = input.get("hasta").and_then(|v| v.as_f64());
+                self.read_game(at, to)
+            }
+            "leer_jugada" => {
+                let id = text("id");
+                self.tag_select(&id);
+                let Some(play) = self.tag_in_hand().filter(|play| play.id == id) else {
+                    return format!("No existe la jugada {id}");
+                };
+                let mut out = format!("{} ({}): ", play.name, play.tag);
+                out.push_str(&self.read_game(play.start, Some(play.end)));
+                if let Some(judged) = self.eval_play(&play) {
+                    out.push_str(&format!(
+                        "
+Veredicto del modelo de juego: {} — {}",
+                        judged.judgement.verdict.label(),
+                        judged.judgement.reasons.join("; ")
+                    ));
+                }
+                out
             }
             "evaluar_jugada" => {
                 let id = text("id");
@@ -9298,6 +9335,31 @@ Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque
         let context = Arc::new(Context::with_players(&set, &calibration, &players));
         *cache = Some((key, Arc::clone(&context)));
         Some(context)
+    }
+
+    /// What is happening at timeline second `at`, or through `[at, to]`,
+    /// read from the judged team's side for the assistant.
+    fn read_game(&self, at: f64, to: Option<f64>) -> String {
+        use concat_vision::football::read;
+        let Some(clip) = self.footage_at(at) else {
+            return "No hay vídeo en ese punto de la línea de tiempo".into();
+        };
+        let Some(context) = self.eval_context(&clip.id) else {
+            return "Ese vídeo no está analizado y calibrado: analiza los jugadores y calibra el campograma primero".into();
+        };
+        let source = |t: f64| {
+            let t = t.clamp(clip.start, clip.start + clip.duration);
+            let seconds = clip.source_start + (t - clip.start) * clip.speed;
+            (seconds.max(0.0) * 1000.0).round() as u64
+        };
+        let team = self.eval_team;
+        match to.filter(|to| *to > at + 0.5) {
+            Some(to) => read::describe_span(&context, team, source(at), source(to)),
+            None => match read::moment(&context, team, source(at)) {
+                Some(moment) => read::describe(&moment),
+                None => "Sin datos de campo en ese instante (fuera del tramo analizado o sin calibrar)".into(),
+            },
+        }
     }
 
     /// The footage under timeline second `at`.
