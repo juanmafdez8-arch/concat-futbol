@@ -44,6 +44,34 @@ component Bubble inherits Rectangle {
     }
 }
 
+/// A question asked often, as a pill to press.
+component Chip inherits Rectangle {
+    in property <string> label;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    height: 24px;
+    width: caption.preferred-width + 22px;
+    border-radius: 12px;
+    background: touch.has-hover && root.enabled ? Theme.field-hover : Theme.field;
+    border-width: 1px;
+    border-color: Theme.line;
+    opacity: root.enabled ? 1 : 0.5;
+
+    caption := Text {
+        text: root.label;
+        color: Theme.fg;
+        font-size: Theme.fs - 1px;
+        vertical-alignment: center;
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
 export component AssistantPane inherits Pane {
     in property <int> pane-seat;
     in property <bool> pane-removable;
@@ -178,6 +206,40 @@ export component AssistantPane inherits Pane {
                     color: Theme.fg-muted;
                     font-size: Theme.fs - 1px;
                     font-italic: true;
+                }
+            }
+        }
+
+        // What is asked most, one press away.
+        Rectangle {
+            height: 34px;
+            clip: true;
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 10px;
+                padding-top: 6px;
+                padding-bottom: 4px;
+                spacing: 6px;
+                alignment: start;
+                Chip {
+                    label: "Leer instante";
+                    enabled: !Editor.assistant-busy;
+                    clicked => { Editor.assistant-send("Lee el juego en este instante y explícamelo como analista."); }
+                }
+                Chip {
+                    label: "Resumen táctico";
+                    enabled: !Editor.assistant-busy;
+                    clicked => { Editor.assistant-send("Hazme el resumen táctico y físico de este clip y dime las tres conclusiones más importantes."); }
+                }
+                Chip {
+                    label: "Evaluar";
+                    enabled: !Editor.assistant-busy;
+                    clicked => { Editor.assistant-send("Evalúa las acciones del partido."); }
+                }
+                Chip {
+                    label: "Informe";
+                    enabled: !Editor.assistant-busy;
+                    clicked => { Editor.assistant-send("Hazme el informe post-partido."); }
                 }
             }
         }

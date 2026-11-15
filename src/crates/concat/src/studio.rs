@@ -8386,6 +8386,7 @@ Qué herramienta usar:
 - Preguntas por un grupo de jugadas («qué presiones salieron mal», «cuáles salidas de balón fueron bien», «cuántas…») → `listar_jugadas` con `accion` y `veredicto`. Nunca uses `evaluar_jugada` para un grupo.
 - Solo cuando nombran una jugada concreta por su id (p3, p12…): «por qué la p3…», «qué falló en la p3» → `evaluar_jugada` con ese id.
 - «qué está pasando», «qué ves aquí», «cómo estamos colocadas», «explícame la jugada» → `leer_juego` (el instante del cabezal o un tramo) o `leer_jugada` (por id). Interpreta tú los números como un analista: nombra la fase, dónde está el balón, si el bloque está junto o partido (más de 35 m de largo o más de 15 m entre líneas es partido), la altura de la línea, quién tiene superioridad cerca del balón y qué decisión o ajuste lo explica. Si la visibilidad es baja, dilo y no concluyas de más.
+- «resume el clip / el partido», «cómo jugamos», «cuánto corrimos», «cómo presionamos», «pases entre líneas» → `resumen_tactico`. El control del espacio es el porcentaje de terreno junto al balón al que llegamos antes que el rival (más de 55 % es dominio); un pase que supera a 3 o más rivales rompe líneas; la presión es buena si la más cercana está a menos de 3 m y hay 2 o más a menos de 8 m. Los datos físicos solo cuentan lo que ve la cámara: dilo.
 - Para explicar por qué una jugada salió bien o mal, combina `leer_jugada` (qué pasó) con su veredicto (qué pedía el modelo de juego).
 - «la pN está bien/mal hecha», «guárdala como ejemplo» → `marcar_referencia`.
 - «sube/baja la exigencia», «el bloque no puede medir más de…» → `cambiar_umbral`; las claves de KPI válidas son: block_length (longitud o largo del bloque, lo que «mide» el bloque de delante a atrás, m), width (anchura del equipo de banda a banda, m), def_line_height (altura de la línea defensiva, m), line_gap (distancia entre líneas, m), shift_follow (seguimiento lateral, 0-1), pressers_3s (jugadores presionando a los 3 s), nearest_2s (distancia del más cercano a los 2 s, m), regain_s (segundos en recuperar), behind_ball_5s (jugadores por detrás del balón a los 5 s), reorganise_s (segundos en reorganizarse), support_15m (apoyos a 15 m), superiority_zone (superioridad cerca del balón), progress_m (metros progresados).
@@ -8450,6 +8451,11 @@ Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque
                 json!({"type": "object", "properties": {
                 "segundo": {"type": "number", "description": "Segundo de la línea de tiempo. NO lo pongas para «ahora», «aquí» o «este instante»: sin él se lee el cabezal"},
                 "hasta": {"type": "number", "description": "Fin del tramo, en segundos de la línea de tiempo"}}}),
+            ),
+            tool(
+                "resumen_tactico",
+                "Resumen táctico y físico del clip entero que está bajo el cabezal: posesión, forma con y sin balón, control del espacio, presión, pases que superan rivales, carga física (metros, alta velocidad, sprints) y momentos clave.",
+                none.clone(),
             ),
             tool(
                 "leer_jugada",
@@ -8743,6 +8749,12 @@ Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque
                     .and_then(|v| v.as_f64())
                     .filter(|_| asked == Some(at));
                 self.read_game(at, to)
+            }
+            "resumen_tactico" => {
+                match self.footage_at(f64::from(self.playhead)) {
+                    Some(clip) => self.read_game(clip.start, Some(clip.start + clip.duration)),
+                    None => "No hay vídeo bajo el cabezal".into(),
+                }
             }
             "leer_jugada" => {
                 let id = text("id");

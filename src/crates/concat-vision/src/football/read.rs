@@ -14,7 +14,9 @@
 //! into the box, for and against - and how the team stood with the ball
 //! and without it.
 
-use super::eval::{Context, Shape, Snapshot, depth, shape};
+use std::collections::{HashMap, VecDeque};
+
+use super::eval::{Context, Placed, Shape, Snapshot, depth, shape};
 
 /// How long after the ball changes hands the play is still a transition.
 const TRANSITION_MS: u64 = 6000;
@@ -24,6 +26,23 @@ const LOOSE_MS: u64 = 3000;
 const NEAR_BALL_M: f64 = 15.0;
 /// Within this of an instant a snapshot stands for it.
 const REACH_MS: u64 = 700;
+/// Round the ball, for whose ground it is, in metres.
+const CONTROL_M: f64 = 25.0;
+/// A player this near the ball is on it or pressing it, in metres.
+const CARRY_M: f64 = 2.5;
+const PRESS_M: f64 = 8.0;
+/// A pass: the ball from one team-mate to another this far apart at
+/// least, within this long.
+const PASS_MIN_M: f64 = 5.0;
+const PASS_MS: u64 = 4000;
+/// A pass that gains this much ground is progressive, in metres.
+const PROGRESSIVE_M: f64 = 10.0;
+/// Running: high speed and sprint from these on, and nobody runs faster
+/// than the last - past it the tracking slipped. In km/h, the women's
+/// game's usual bands.
+const HIGH_SPEED_KMH: f64 = 16.0;
+const SPRINT_KMH: f64 = 20.0;
+const MAX_KMH: f64 = 33.0;
 /// The pitch, in metres.
 const LENGTH: f64 = 105.0;
 const WIDTH: f64 = 68.0;
@@ -74,6 +93,167 @@ pub struct Moment {
     /// The team's players minus the rival's within [`NEAR_BALL_M`] of the
     /// ball.
     pub superiority: Option<i32>,
+    /// The share of the ground within [`CONTROL_M`] of the ball the team
+    /// reaches first, 0 to 1.
+    pub control: Option<f64>,
+    /// The team's nearest outfield player to the ball, in metres, and how
+    /// many are within [`PRESS_M`] of it.
+    pub pressure: Option<(f64, usize)>,
+}
+
+/// A pass between two of a team's players.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Pass {
+    /// When it was received, in source milliseconds.
+    pub ms: u64,
+    /// The ground it gained towards the rival goal, in metres.
+    pub gain: f64,
+    /// The rival outfield players it left behind.
+    pub bypassed: usize,
+}
+
+/// How much a team ran over a stretch, as far as the camera saw it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Physical {
+    /// Metres covered, all the seen players together.
+    pub distance_m: f64,
+    /// Of those, at high speed.
+    pub high_speed_m: f64,
+    /// Sprints begun.
+    pub sprints: usize,
+    /// The fastest anybody went, in km/h.
+    pub top_kmh: f64,
+}
+
+fn dist(a: (f64, f64), b: (f64, f64)) -> f64 {
+    (a.0 - b.0).hypot(a.1 - b.1)
+}
+
+/// The share of the ground round the ball `team` reaches first: each
+/// point of a two metre grid is its nearest outfield player's.
+pub fn control(snap: &Snapshot, team: u8) -> Option<f64> {
+    let ball = snap.ball?;
+    let outfield: Vec<&Placed> = snap
+        .players
+        .iter()
+        .filter(|p| !p.keeper && (p.team == 1 || p.team == 2))
+        .collect();
+    if outfield.len() < 4 {
+        return None;
+    }
+    let steps = (CONTROL_M / 2.0) as i32;
+    let (mut ours, mut all) = (0usize, 0usize);
+    for i in -steps..=steps {
+        for j in -steps..=steps {
+            let at = (ball.0 + f64::from(i) * 2.0, ball.1 + f64::from(j) * 2.0);
+            if at.0 < 0.0 || at.0 > LENGTH || at.1 < 0.0 || at.1 > WIDTH || dist(at, ball) > CONTROL_M {
+                continue;
+            }
+            let Some(nearest) = outfield
+                .iter()
+                .min_by(|a, b| dist(a.at, at).total_cmp(&dist(b.at, at)))
+            else {
+                continue;
+            };
+            all += 1;
+            if nearest.team == team {
+                ours += 1;
+            }
+        }
+    }
+    (all > 0).then(|| ours as f64 / all as f64)
+}
+
+/// The player of `team` on the ball, if one is.
+fn carrier(snap: &Snapshot, team: u8) -> Option<&Placed> {
+    let ball = snap.ball?;
+    snap.players
+        .iter()
+        .filter(|p| p.team == team && dist(p.at, ball) <= CARRY_M)
+        .min_by(|a, b| dist(a.at, ball).total_cmp(&dist(b.at, ball)))
+}
+
+/// The passes `team` put together in `[from_ms, to_ms]`: the ball on one
+/// player and then on another, the rival not on it in between.
+pub fn passes(ctx: &Context, team: u8, from_ms: u64, to_ms: u64) -> Vec<Pass> {
+    let rival = 3 - team;
+    let mut out = Vec::new();
+    let mut last: Option<(u64, u32, (f64, f64))> = None;
+    let start = ctx.snaps.partition_point(|s| s.ms < from_ms);
+    for snap in ctx.snaps[start..].iter().take_while(|s| s.ms <= to_ms) {
+        let Some(now) = carrier(snap, team) else {
+            if carrier(snap, rival).is_some() {
+                last = None;
+            }
+            continue;
+        };
+        if let Some((ms, id, at)) = last
+            && id != now.id
+            && snap.ms.saturating_sub(ms) <= PASS_MS
+            && dist(at, now.at) >= PASS_MIN_M
+            && let Some(goal) = ctx.sides.goal(team, snap.ms)
+        {
+            let (a, b) = (depth(goal, at.0), depth(goal, now.at.0));
+            let bypassed = snap
+                .players
+                .iter()
+                .filter(|p| p.team == rival && !p.keeper)
+                .filter(|p| {
+                    let d = depth(goal, p.at.0);
+                    d > a && d < b
+                })
+                .count();
+            out.push(Pass { ms: snap.ms, gain: b - a, bypassed });
+        }
+        last = Some((snap.ms, now.id, now.at));
+    }
+    out
+}
+
+/// How much `team` ran in `[from_ms, to_ms]`. Speed is taken over about a
+/// second, so the tracking's jitter does not read as running.
+pub fn physical(ctx: &Context, team: u8, from_ms: u64, to_ms: u64) -> Physical {
+    let mut out = Physical::default();
+    let mut seen: HashMap<u32, (VecDeque<(u64, (f64, f64))>, bool)> = HashMap::new();
+    let start = ctx.snaps.partition_point(|s| s.ms < from_ms);
+    for snap in ctx.snaps[start..].iter().take_while(|s| s.ms <= to_ms) {
+        for player in snap.players.iter().filter(|p| p.team == team && !p.keeper) {
+            let (trail, sprinting) = seen.entry(player.id).or_default();
+            // Out of sight for a while: a new run of instants.
+            if trail.back().is_some_and(|(ms, _)| snap.ms.saturating_sub(*ms) > 600) {
+                trail.clear();
+                *sprinting = false;
+            }
+            let step_ms = trail.back().map(|(ms, _)| snap.ms.saturating_sub(*ms));
+            trail.push_back((snap.ms, player.at));
+            while trail.front().is_some_and(|(ms, _)| snap.ms.saturating_sub(*ms) > 1200) {
+                trail.pop_front();
+            }
+            let (Some(step_ms), Some(&(then, from))) = (step_ms, trail.front()) else {
+                continue;
+            };
+            let over = snap.ms.saturating_sub(then);
+            if over < 600 {
+                continue;
+            }
+            let kmh = dist(from, player.at) / (over as f64 / 1000.0) * 3.6;
+            if kmh > MAX_KMH {
+                continue;
+            }
+            let covered = kmh / 3.6 * (step_ms as f64 / 1000.0);
+            out.distance_m += covered;
+            out.top_kmh = out.top_kmh.max(kmh);
+            if kmh >= HIGH_SPEED_KMH {
+                out.high_speed_m += covered;
+            }
+            let sprint = kmh >= SPRINT_KMH;
+            if sprint && !*sprinting {
+                out.sprints += 1;
+            }
+            *sprinting = sprint;
+        }
+    }
+    out
 }
 
 /// A key moment of a play.
@@ -173,7 +353,20 @@ pub fn moment(ctx: &Context, team: u8, ms: u64) -> Option<Moment> {
         };
         near(team) - near(rival)
     });
+    let pressure = snap.ball.and_then(|b| {
+        let mut gaps: Vec<f64> = snap
+            .players
+            .iter()
+            .filter(|p| p.team == team && !p.keeper)
+            .map(|p| dist(p.at, b))
+            .collect();
+        gaps.sort_by(f64::total_cmp);
+        let nearest = *gaps.first()?;
+        Some((nearest, gaps.iter().filter(|d| **d <= PRESS_M).count()))
+    });
     Some(Moment {
+        control: control(snap, team),
+        pressure,
         ms: snap.ms,
         phase,
         since_change_ms,
@@ -234,6 +427,20 @@ pub fn describe(moment: &Moment) -> String {
             _ => "igualdad".to_owned(),
         };
         out.push_str(&format!("\nCerca del balón (15 m): {read}."));
+    }
+    if let Some(share) = moment.control {
+        out.push_str(&format!(
+            "\nControl del espacio a 25 m del balón: nosotras {:.0} %, rival {:.0} %.",
+            share * 100.0,
+            (1.0 - share) * 100.0
+        ));
+    }
+    if matches!(moment.phase, Phase::Defence | Phase::DefensiveTransition)
+        && let Some((nearest, close)) = moment.pressure
+    {
+        out.push_str(&format!(
+            "\nPresión sobre el balón: la más cercana a {nearest:.0} m, {close} a menos de 8 m."
+        ));
     }
     out.push_str(&format!(
         "\nVisibilidad del equipo: {:.0} %.",
@@ -302,9 +509,12 @@ fn mean(values: impl Iterator<Item = f64>) -> Option<f64> {
 pub fn describe_span(ctx: &Context, team: u8, from_ms: u64, to_ms: u64) -> String {
     let moments: Vec<Moment> = {
         let start = ctx.snaps.partition_point(|s| s.ms < from_ms);
+        // A long stretch is read once a second: enough for its averages.
+        let stride = if to_ms.saturating_sub(from_ms) > 120_000 { 5 } else { 1 };
         ctx.snaps[start..]
             .iter()
             .take_while(|s| s.ms <= to_ms)
+            .step_by(stride)
             .filter_map(|s| moment(ctx, team, s.ms))
             .collect()
     };
@@ -355,6 +565,52 @@ pub fn describe_span(ctx: &Context, team: u8, from_ms: u64, to_ms: u64) -> Strin
         &|m| matches!(m.phase, Phase::Defence | Phase::DefensiveTransition),
         "Sin balón",
     ));
+    let with_ball = |m: &&Moment| matches!(m.phase, Phase::Attack | Phase::AttackingTransition);
+    let without_ball = |m: &&Moment| matches!(m.phase, Phase::Defence | Phase::DefensiveTransition);
+    if let Some(share) = mean(moments.iter().filter(with_ball).filter_map(|m| m.control)) {
+        out.push_str(&format!(
+            "\nControl del espacio junto al balón cuando atacamos: {:.0} %.",
+            share * 100.0
+        ));
+    }
+    if let Some(share) = mean(moments.iter().filter(without_ball).filter_map(|m| m.control)) {
+        out.push_str(&format!(
+            "\nControl del espacio junto al balón cuando defendemos: {:.0} %.",
+            share * 100.0
+        ));
+    }
+    if let (Some(nearest), Some(close)) = (
+        mean(moments.iter().filter(without_ball).filter_map(|m| m.pressure.map(|p| p.0))),
+        mean(moments.iter().filter(without_ball).filter_map(|m| m.pressure.map(|p| p.1 as f64))),
+    ) {
+        out.push_str(&format!(
+            "\nPresión sin balón: la más cercana a {nearest:.1} m del balón de media, {close:.1} jugadoras a menos de 8 m."
+        ));
+    }
+    let made = passes(ctx, team, from_ms, to_ms);
+    if !made.is_empty() {
+        let progressive = made.iter().filter(|p| p.gain >= PROGRESSIVE_M).count();
+        let bypassed: usize = made.iter().map(|p| p.bypassed).sum();
+        out.push_str(&format!(
+            "\nPases nuestros detectados: {} ({progressive} progresivos de +10 m); rivales superadas con pase: {bypassed}.",
+            made.len()
+        ));
+        if let Some(best) = made.iter().max_by_key(|p| p.bypassed).filter(|p| p.bypassed >= 2) {
+            out.push_str(&format!(
+                " El mejor, en {}, supera a {} y gana {:.0} m.",
+                clock(best.ms),
+                best.bypassed,
+                best.gain
+            ));
+        }
+    }
+    let ran = physical(ctx, team, from_ms, to_ms);
+    if ran.distance_m > 0.0 {
+        out.push_str(&format!(
+            "\nFísico (solo lo que ve la cámara): {:.0} m recorridos entre todas, {:.0} m a alta velocidad (+16 km/h), {} sprints (+20 km/h), punta de {:.1} km/h.",
+            ran.distance_m, ran.high_speed_m, ran.sprints, ran.top_kmh
+        ));
+    }
     let key = events(ctx, team, from_ms, to_ms);
     if key.is_empty() {
         out.push_str("\nMomentos clave: ninguno (el balón no cambió de equipo ni de zona).");
@@ -402,6 +658,30 @@ mod tests {
         assert!(text.contains("Nosotras"), "{text}");
         let late = moment(&ctx, 1, 7000).expect("an instant");
         assert!(matches!(late.phase, Phase::Defence | Phase::DefensiveTransition | Phase::Unknown));
+    }
+
+    #[test]
+    fn the_ground_round_the_ball_is_shared_and_running_is_measured() {
+        let ctx = context();
+        let share = control(&ctx.snaps[0], 1).expect("a share");
+        assert!((0.0..=1.0).contains(&share));
+        // Nobody moves in this match: no metres, no sprints, no passes.
+        let ran = physical(&ctx, 1, 0, 7800);
+        assert_eq!(ran.sprints, 0);
+        assert!(ran.distance_m < 1.0, "{ran:?}");
+        assert!(passes(&ctx, 1, 0, 7800).is_empty());
+    }
+
+    #[test]
+    fn a_ball_moved_between_team_mates_is_a_pass() {
+        let mut ctx = context();
+        // The ball from team 1's deepest player to one fifteen metres on.
+        for snap in ctx.snaps.iter_mut().filter(|s| s.ms >= 1000) {
+            snap.ball = Some((35.0, 35.0));
+        }
+        let made = passes(&ctx, 1, 0, 1800);
+        assert_eq!(made.len(), 1, "{made:?}");
+        assert!(made[0].gain > 10.0, "{made:?}");
     }
 
     #[test]
