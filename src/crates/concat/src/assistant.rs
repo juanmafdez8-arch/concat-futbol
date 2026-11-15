@@ -39,7 +39,7 @@ impl Default for Config {
         Self {
             provider: Provider::Auto,
             ollama_url: "http://localhost:11434".into(),
-            ollama_model: "qwen2.5:7b".into(),
+            ollama_model: "qwen3:8b".into(),
             claude_model: "claude-sonnet-5-5".into(),
             claude_key: None,
         }
@@ -207,7 +207,25 @@ pub fn ollama_body(config: &Config, system: &str, history: &[Turn], tools: &[Too
             }
         }
     }
-    json!({"model":config.ollama_model,"stream":false,"options":{"temperature":0.2},"tools":tools.iter().map(|tool| json!({"type":"function","function":{"name":tool.name,"description":tool.description,"parameters":tool.schema}})).collect::<Vec<_>>(),"messages":messages})
+    let mut body = json!({"model":config.ollama_model,"stream":false,"keep_alive":"30m","options":{"temperature":0.2,"num_ctx":6144},"tools":tools.iter().map(|tool| json!({"type":"function","function":{"name":tool.name,"description":tool.description,"parameters":tool.schema}})).collect::<Vec<_>>(),"messages":messages});
+    // Qwen 3 thinks aloud before answering by default: slower, and the
+    // tool calls are what matter here. Other models take no `think`.
+    if config.ollama_model.starts_with("qwen3") {
+        body["think"] = json!(false);
+    }
+    body
+}
+
+/// A reply with any `<think>…</think>` a model left in it taken out.
+fn without_thinking(text: &str) -> String {
+    let mut out = text.to_owned();
+    while let (Some(a), Some(b)) = (out.find("<think>"), out.find("</think>")) {
+        if b < a {
+            break;
+        }
+        out.replace_range(a..b + "</think>".len(), "");
+    }
+    out.trim().to_owned()
 }
 
 /// Parses an Ollama chat response into an assistant turn.
@@ -219,9 +237,10 @@ pub fn parse_ollama(value: &Value) -> Result<Turn, String> {
     if let Some(text) = message
         .get("content")
         .and_then(Value::as_str)
+        .map(without_thinking)
         .filter(|text| !text.is_empty())
     {
-        parts.push(Part::Text(text.to_owned()));
+        parts.push(Part::Text(text));
     }
     if let Some(calls) = message.get("tool_calls").and_then(Value::as_array) {
         for (index, call) in calls.iter().enumerate() {
@@ -356,7 +375,9 @@ fn step(
 ) -> Result<Turn, String> {
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(5))
-        .timeout_read(Duration::from_secs(180))
+        // A local model's first answer waits on the model loading from
+        // disk and the whole prompt being read: minutes on a laptop GPU.
+        .timeout_read(Duration::from_secs(600))
         .build();
     let (url, body) = if provider == "claude" {
         (
@@ -394,7 +415,18 @@ fn provider_error(provider: &str, error: &str) -> String {
     if provider == "claude" && (error.contains("401") || error.contains("Unauthorized")) {
         "La clave de Claude no es válida".to_owned()
     } else if provider == "local" {
-        "No encuentro el modelo local: instala Ollama (ollama.com) y ejecuta `ollama pull qwen2.5:7b`, o añade una clave de Claude.".to_owned()
+        // What went wrong, not always "no model": a slow first answer and
+        // a missing model want different things done.
+        let lower = error.to_lowercase();
+        if lower.contains("timed out") || lower.contains("timeout") {
+            "El modelo local ha tardado demasiado en responder (suele pasar la primera vez, mientras se carga). Vuelve a preguntar: ya estará cargado.".to_owned()
+        } else if lower.contains("404") || lower.contains("not found") {
+            "El modelo local no está descargado: ejecuta `ollama pull qwen3:8b` (o pon en Ajustes el nombre de uno que tengas), o añade una clave de Claude.".to_owned()
+        } else if lower.contains("refused") || lower.contains("10061") || lower.contains("connect") {
+            "Ollama no está en marcha: ábrelo (o instálalo desde ollama.com), o añade una clave de Claude.".to_owned()
+        } else {
+            format!("El modelo local ha fallado: {error}")
+        }
     } else {
         format!("No se pudo conectar con Claude: {error}. Revisa la conexión y la clave de API.")
     }
@@ -488,7 +520,7 @@ mod tests {
     fn config_load_defaults_and_round_trip() {
         let dir = std::env::temp_dir().join(format!("concat-assistant-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(Config::load(&dir).ollama_model, "qwen2.5:7b");
+        assert_eq!(Config::load(&dir).ollama_model, "qwen3:8b");
         let config = Config {
             provider: Provider::Claude,
             claude_key: Some("test-key".into()),

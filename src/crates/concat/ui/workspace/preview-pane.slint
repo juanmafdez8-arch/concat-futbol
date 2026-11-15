@@ -1059,6 +1059,7 @@ export component PreviewPane inherits Rectangle {
             // picture, and the line saying what the tool out does next
             // across its top. Not over a library file, which has no marks.
             if Editor.analysis-available && root.source-name == "": AnalysisBar {
+                room: stage.height;
                 x: Math.max(4px, stage.x - self.width - 8px);
                 y: Math.max(stage.y, stage.y + (stage.height - self.height) / 2);
             }

@@ -8448,7 +8448,7 @@ Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque
                 "leer_juego",
                 "Lee qué está pasando en un instante, medido con el tracking y el campo calibrado: fase (ataque organizado, transición ofensiva, defensa organizada, transición defensiva), zona del balón (tercio y carril), forma de cada equipo (largo, ancho, altura de la línea defensiva, distancia entre líneas, jugadoras cerca y por detrás del balón) y superioridad junto al balón. Sin `segundo`, el instante del cabezal; con `hasta`, describe el tramo entero y sus momentos clave (pérdidas, recuperaciones, entradas al último tercio y al área).",
                 json!({"type": "object", "properties": {
-                "segundo": {"type": "number", "description": "Segundo de la línea de tiempo; por defecto el cabezal"},
+                "segundo": {"type": "number", "description": "Segundo de la línea de tiempo. NO lo pongas para «ahora», «aquí» o «este instante»: sin él se lee el cabezal"},
                 "hasta": {"type": "number", "description": "Fin del tramo, en segundos de la línea de tiempo"}}}),
             ),
             tool(
@@ -8730,8 +8730,18 @@ Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque
                 }
             }
             "leer_juego" => {
-                let at = input.get("segundo").and_then(|v| v.as_f64()).unwrap_or(f64::from(self.playhead));
-                let to = input.get("hasta").and_then(|v| v.as_f64());
+                // A small model fills `segundo` in with a guess: one with
+                // no footage under it means the playhead, as leaving it
+                // out does.
+                let playhead = f64::from(self.playhead);
+                let asked = input.get("segundo").and_then(|v| v.as_f64());
+                let at = asked
+                    .filter(|at| self.footage_at(*at).is_some())
+                    .unwrap_or(playhead);
+                let to = input
+                    .get("hasta")
+                    .and_then(|v| v.as_f64())
+                    .filter(|_| asked == Some(at));
                 self.read_game(at, to)
             }
             "leer_jugada" => {

@@ -18,6 +18,8 @@ use super::eval::{Context, Shape, Snapshot, depth, shape};
 
 /// How long after the ball changes hands the play is still a transition.
 const TRANSITION_MS: u64 = 6000;
+/// How long a ball nobody is on still counts as its last side's.
+const LOOSE_MS: u64 = 3000;
 /// Round the ball, for the numbers either side, in metres.
 const NEAR_BALL_M: f64 = 15.0;
 /// Within this of an instant a snapshot stands for it.
@@ -99,11 +101,27 @@ fn holder_at(ctx: &Context, ms: u64) -> (Option<u8>, Option<u64>) {
     let Some(&(_, holder)) = index.checked_sub(1).and_then(|i| ctx.possession.get(i)) else {
         return (None, None);
     };
-    let since = ctx.possession[..index]
-        .iter()
-        .rev()
-        .find(|(_, other)| *other != holder && other.is_some())
-        .map(|(t, _)| *t);
+    // A ball in the air or hidden for a moment is still its last side's:
+    // whoever had it within [`LOOSE_MS`] has it.
+    let holder = holder.or_else(|| {
+        ctx.possession[..index]
+            .iter()
+            .rev()
+            .take_while(|(t, _)| ms.saturating_sub(*t) <= LOOSE_MS)
+            .find_map(|(_, who)| *who)
+    });
+    // The holder's first instant after the other side last had it: when
+    // the ball changed hands, not when the other side was last seen on it.
+    let since = holder.and_then(|_| {
+        let past = &ctx.possession[..index];
+        let other = past
+            .iter()
+            .rposition(|(_, other)| *other != holder && other.is_some())?;
+        past[other + 1..]
+            .iter()
+            .find(|(_, who)| *who == holder)
+            .map(|(t, _)| *t)
+    });
     (holder, since)
 }
 
@@ -196,7 +214,15 @@ pub fn describe(moment: &Moment) -> String {
     }
     out.push('.');
     match moment.zone {
-        Some((third, lane)) => out.push_str(&format!(" Balón en nuestro {third}, por el {lane}.")),
+        Some((third, lane)) => {
+            let place = match third {
+                "tercio defensivo" => "nuestro tercio defensivo (cerca de nuestra portería)",
+                "tercio medio" => "el tercio medio",
+                _ => "el último tercio (campo rival, zona de ataque)",
+            };
+            let lane = if lane.starts_with("banda") { format!("la {lane}") } else { format!("el {lane}") };
+            out.push_str(&format!(" Balón en {place}, por {lane}."));
+        }
         None => out.push_str(" Balón no visible."),
     }
     out.push_str(&format!("\nNosotras: {}.", side(&moment.ours)));
@@ -219,21 +245,22 @@ pub fn describe(moment: &Moment) -> String {
 /// The key moments of `[from_ms, to_ms]` from `team`'s side, in order.
 pub fn events(ctx: &Context, team: u8, from_ms: u64, to_ms: u64) -> Vec<Event> {
     let mut out = Vec::new();
-    let mut held: Option<Option<u8>> = None;
+    // The last side known to have it: a spell nobody has it is no change.
+    let mut held: Option<u8> = None;
     let (mut last_third, mut in_box) = (None::<&'static str>, false);
     let start = ctx.snaps.partition_point(|s| s.ms < from_ms);
     for snap in ctx.snaps[start..].iter().take_while(|s| s.ms <= to_ms) {
         let (holder, _) = holder_at(ctx, snap.ms);
         if let Some(before) = held
-            && before != holder
             && let Some(now) = holder
+            && before != now
         {
             out.push(Event {
                 ms: snap.ms,
                 what: if now == team { "recuperación" } else { "pérdida" }.to_owned(),
             });
         }
-        held = Some(holder);
+        held = holder.or(held);
         let (Some(ball), Some(goal)) = (snap.ball, ctx.sides.goal(team, snap.ms)) else {
             continue;
         };

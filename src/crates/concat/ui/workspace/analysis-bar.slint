@@ -22,10 +22,11 @@ component BarButton inherits Rectangle {
     in property <bool> on;
     in property <bool> enabled: true;
     in property <color> swatch: transparent;
+    in property <length> size: 34px;
     callback clicked();
 
-    width: 34px;
-    height: 34px;
+    width: root.size;
+    height: root.size;
     border-radius: 8px;
     background: root.on ? Theme.accent : touch.has-hover && root.enabled ? #ffffff1a : transparent;
     opacity: root.enabled ? 1 : 0.4;
@@ -73,6 +74,10 @@ component Rule inherits Rectangle {
 /// The tools, two to a row: the pointer and the colour, the player
 /// tools, the drawings with the freeze, and undo and clear.
 export component AnalysisBar inherits Rectangle {
+    /// The height there is for the bar: on a short stage its cells shrink
+    /// so the last tools are not cut off.
+    in property <length> room: 1000px;
+    property <length> cell: root.room < 370px ? 26px : 34px;
     width: column.preferred-width;
     height: column.preferred-height;
     border-radius: 12px;
@@ -92,11 +97,13 @@ export component AnalysisBar inherits Rectangle {
         HorizontalLayout {
             spacing: 3px;
             BarButton {
+                size: root.cell;
                 icon: Editor.analysis-collapsed ? "M4 6h16 M4 12h16 M4 18h16" : "M6 6l12 12 M18 6L6 18";
                 tip: Editor.analysis-collapsed ? I18n.t("bar.open") : I18n.t("bar.fold");
                 clicked => { Editor.analysis-collapsed = !Editor.analysis-collapsed; }
             }
             if Editor.analysis-collapsed && Editor.analysis-tool != 0: BarButton {
+                size: root.cell;
                 icon: "M5 3l13 6.5-5.5 1.5-2.5 5.5z";
                 tip: I18n.t("bar.pointer");
                 on: true;
@@ -110,6 +117,7 @@ export component AnalysisBar inherits Rectangle {
         HorizontalLayout {
             spacing: 3px;
             BarButton {
+                size: root.cell;
                 icon: "M5 3l13 6.5-5.5 1.5-2.5 5.5z";
                 tip: I18n.t("bar.pointer");
                 on: Editor.analysis-tool == 0;
@@ -117,6 +125,7 @@ export component AnalysisBar inherits Rectangle {
             }
 
             BarButton {
+                size: root.cell;
                 swatch: Editor.analysis-colour;
                 tip: I18n.t("bar.colour");
                 clicked => { Editor.analysis-colour-next(); }
@@ -126,6 +135,7 @@ export component AnalysisBar inherits Rectangle {
         HorizontalLayout {
             spacing: 3px;
             BarButton {
+                size: root.cell;
                 icon: "M12 8a4 4 0 1 0 0 8a4 4 0 1 0 0-8 M12 2v2 M12 20v2 M4.9 4.9l1.4 1.4 M17.7 17.7l1.4 1.4 M2 12h2 M20 12h2 M4.9 19.1l1.4-1.4 M17.7 6.3l1.4-1.4";
                 tip: I18n.t("bar.spotlight");
                 on: Editor.analysis-tool == 1;
@@ -133,6 +143,7 @@ export component AnalysisBar inherits Rectangle {
             }
 
             BarButton {
+                size: root.cell;
                 icon: "M12 3a3 3 0 1 0 0 6a3 3 0 1 0 0-6 M6 21v-2a6 6 0 0 1 12 0v2z";
                 tip: I18n.t("bar.shade");
                 on: Editor.analysis-tool == 2;
@@ -143,6 +154,7 @@ export component AnalysisBar inherits Rectangle {
         HorizontalLayout {
             spacing: 3px;
             BarButton {
+                size: root.cell;
                 icon: "M12 2a2.5 2.5 0 1 0 0 5a2.5 2.5 0 1 0 0-5 M12 9v8 M3 19a9 3 0 1 0 18 0a9 3 0 1 0-18 0";
                 tip: I18n.t("bar.ring");
                 on: Editor.analysis-tool == 3;
@@ -150,6 +162,7 @@ export component AnalysisBar inherits Rectangle {
             }
 
             BarButton {
+                size: root.cell;
                 icon: "M8 2h8l-4 5z M12 11a2.5 2.5 0 1 0 0 5a2.5 2.5 0 1 0 0-5 M7 22v-1a5 5 0 0 1 10 0v1";
                 tip: I18n.t("bar.pointerMark");
                 on: Editor.analysis-tool == 4;
@@ -160,6 +173,7 @@ export component AnalysisBar inherits Rectangle {
         HorizontalLayout {
             spacing: 3px;
             BarButton {
+                size: root.cell;
                 icon: "M3 7V3h4 M17 3h4v4 M21 17v4h-4 M7 21H3v-4 M12 8a2 2 0 1 0 0 4a2 2 0 1 0 0-4 M9 17a3 3 0 0 1 6 0";
                 tip: I18n.t("bar.frame");
                 on: Editor.analysis-tool == 5;
@@ -167,6 +181,7 @@ export component AnalysisBar inherits Rectangle {
             }
 
             BarButton {
+                size: root.cell;
                 icon: "M12 3a3 3 0 1 0 0 6a3 3 0 1 0 0-6 M7 20a5 5 0 0 1 10 0 M4 4l16 16";
                 tip: I18n.t("bar.erase");
                 on: Editor.analysis-tool == 6;
@@ -179,6 +194,7 @@ export component AnalysisBar inherits Rectangle {
         HorizontalLayout {
             spacing: 3px;
             BarButton {
+                size: root.cell;
                 icon: "M5 19L19 5";
                 tip: I18n.t("bar.line");
                 on: Editor.analysis-tool == 10;
@@ -186,6 +202,7 @@ export component AnalysisBar inherits Rectangle {
             }
 
             BarButton {
+                size: root.cell;
                 icon: "M5 19L19 5 M10 5h9v9";
                 tip: I18n.t("bar.arrow");
                 on: Editor.analysis-tool == 11;
@@ -196,6 +213,7 @@ export component AnalysisBar inherits Rectangle {
         HorizontalLayout {
             spacing: 3px;
             BarButton {
+                size: root.cell;
                 icon: "M4 19C6 8 14 5 19 9 M15 5l4 4-5 1";
                 tip: I18n.t("bar.curve");
                 on: Editor.analysis-tool == 12;
@@ -203,6 +221,7 @@ export component AnalysisBar inherits Rectangle {
             }
 
             BarButton {
+                size: root.cell;
                 icon: "M4 9l7-5 9 4-2 11-12 2z";
                 tip: I18n.t("bar.zone");
                 on: Editor.analysis-tool == 13;
@@ -213,6 +232,7 @@ export component AnalysisBar inherits Rectangle {
         HorizontalLayout {
             spacing: 3px;
             BarButton {
+                size: root.cell;
                 icon: "M5 5a2 2 0 1 0 0 4a2 2 0 1 0 0-4 M12 14a2 2 0 1 0 0 4a2 2 0 1 0 0-4 M19 6a2 2 0 1 0 0 4a2 2 0 1 0 0-4 M6.2 8.6l4.6 6 M13.4 14.5l4.4-5.6";
                 tip: I18n.t("bar.link");
                 on: Editor.analysis-tool == 14;
@@ -220,6 +240,7 @@ export component AnalysisBar inherits Rectangle {
             }
 
             BarButton {
+                size: root.cell;
                 icon: "M12 2v20 M3.3 7l17.4 10 M3.3 17L20.7 7 M9 3.5l3 2 3-2 M9 20.5l3-2 3 2";
                 tip: I18n.t("bar.freeze");
                 clicked => { Editor.draw-freeze(); }
@@ -231,12 +252,14 @@ export component AnalysisBar inherits Rectangle {
         HorizontalLayout {
             spacing: 3px;
             BarButton {
+                size: root.cell;
                 icon: "M9 14L4 9l5-5 M4 9h11a5 5 0 0 1 0 10h-3";
                 tip: I18n.t("bar.undo");
                 clicked => { Editor.analysis-undo(); }
             }
 
             BarButton {
+                size: root.cell;
                 icon: "M3 6h18 M8 6V4h8v2 M6 6l1 14h10l1-14 M10 10v6 M14 10v6";
                 tip: I18n.t("bar.clear");
                 clicked => { Editor.analysis-clear(); }
