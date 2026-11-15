@@ -623,6 +623,48 @@ pub fn describe_span(ctx: &Context, team: u8, from_ms: u64, to_ms: u64) -> Strin
     out
 }
 
+/// The reading's cards for a report, over everything analysed: the
+/// number, what it counts, and how it reads - as the model's KPI cards.
+pub fn cards(ctx: &Context, team: u8) -> Vec<(String, String, String)> {
+    let Some(end) = ctx.snaps.last().map(|s| s.ms) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    // Once a second is enough for an average over a match.
+    if let Some(share) = mean(ctx.snaps.iter().step_by(5).filter_map(|s| control(s, team))) {
+        out.push((
+            format!("{:.0} %", share * 100.0),
+            "Control del espacio".to_owned(),
+            "terreno junto al balón al que llegamos antes".to_owned(),
+        ));
+    }
+    let made = passes(ctx, team, 0, end);
+    if !made.is_empty() {
+        out.push((
+            made.iter().filter(|p| p.gain >= PROGRESSIVE_M).count().to_string(),
+            "Pases progresivos".to_owned(),
+            format!("de +10 m · de {} pases detectados", made.len()),
+        ));
+        out.push((
+            made.iter().map(|p| p.bypassed).sum::<usize>().to_string(),
+            "Rivales superadas con pase".to_owned(),
+            format!("{} pases rompen líneas (3 o más)", made.iter().filter(|p| p.bypassed >= 3).count()),
+        ));
+    }
+    let ran = physical(ctx, team, 0, end);
+    if ran.distance_m > 0.0 {
+        out.push((
+            ran.sprints.to_string(),
+            "Sprints".to_owned(),
+            format!(
+                "+20 km/h · {:.0} m a alta velocidad · punta {:.1} km/h (lo que ve la cámara)",
+                ran.high_speed_m, ran.top_kmh
+            ),
+        ));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

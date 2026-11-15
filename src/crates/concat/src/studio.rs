@@ -7856,7 +7856,12 @@ impl Studio {
         let cards = self
             .board_clip()
             .and_then(|clip| self.eval_context(&clip.id))
-            .map(|context| report::kpi_cards(&report::match_kpis(&context, self.eval_team)))
+            .map(|context| {
+                let mut cards = report::kpi_cards(&report::match_kpis(&context, self.eval_team));
+                // And what the reading measures: space, passes, running.
+                cards.extend(concat_vision::football::read::cards(&context, self.eval_team));
+                cards
+            })
             .unwrap_or_default();
         let title = format!("Informe · {}", self.timeline().name);
         let subtitle = format!("{} · {}", profile.name, Self::report_date());
