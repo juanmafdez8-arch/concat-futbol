@@ -676,7 +676,9 @@ component StageOverlay inherits Rectangle {
         width: root.width;
         height: root.height;
         viewbox-width: 1000;
-        viewbox-height: 1000;
+        // The stage's own shape: a square viewbox is fitted whole into a
+        // wide stage and draws every point pulled in towards the middle.
+        viewbox-height: root.width > 0 ? 1000 * root.height / root.width : 1000;
         commands: root.stroke-path;
         stroke: root.stroke-erase ? #ff5a5a99 : Theme.accent.with-alpha(0.6);
         stroke-width: Math.max(2px, root.stroke-width * root.width);

@@ -6214,9 +6214,10 @@ impl Studio {
             _ => return None,
         };
         let (first, rest) = screen.split_first()?;
-        let mut path = format!("M {:.1} {:.1}", first.0 * 1000.0, first.1 * 1000.0);
+        let tall = self.stage_tall();
+        let mut path = format!("M {:.1} {:.1}", first.0 * 1000.0, first.1 * tall);
         for (x, y) in rest.iter().chain(rest.is_empty().then_some(first)) {
-            path.push_str(&format!(" L {:.1} {:.1}", x * 1000.0, y * 1000.0));
+            path.push_str(&format!(" L {:.1} {:.1}", x * 1000.0, y * tall));
         }
         if closed && screen.len() > 2 {
             path.push_str(" Z");
@@ -6533,6 +6534,9 @@ impl Studio {
                 .then_some((x, y))
         };
         let to_board = |(x, y): (f64, f64)| ((x / pitch::LENGTH) as f32, (y / pitch::WIDTH) as f32);
+        // The board's path viewbox is 1000 across and this down: the
+        // pitch's shape, as the board's is.
+        const BOARD_TALL: f32 = 1000.0 * 68.0 / 105.0;
         // The run behind each player: where he was each 0.4 s of the last
         // three, on the board, as path commands over a 1000 square.
         let trail = |id: u32| -> String {
@@ -6542,7 +6546,7 @@ impl Studio {
                     && let Some(point) = place(map, &tracked)
                 {
                     let (bx, by) = to_board(point);
-                    points.push((bx * 1000.0, by * 1000.0));
+                    points.push((bx * 1000.0, by * BOARD_TALL));
                 }
             }
             if points.len() < 2 {
@@ -6628,7 +6632,7 @@ impl Studio {
                         "{} {:.1} {:.1} ",
                         if index == 0 { "M" } else { "L" },
                         bx * 1000.0,
-                        by * 1000.0
+                        by * BOARD_TALL
                     ));
                 }
                 lines.push(PitchLineData {
@@ -11667,8 +11671,17 @@ Veredicto del modelo de juego: {} — {}",
         [f64::from(u), f64::from(v)]
     }
 
+    /// How tall the stage's path viewbox is for its 1000 across: the
+    /// frame's own shape. A path is fitted into its element whole, keeping
+    /// its shape, so a square viewbox on a wide stage drew every point
+    /// pulled in towards the middle.
+    fn stage_tall(&self) -> f32 {
+        let video = &self.timeline().video;
+        1000.0 * video.height.max(1) as f32 / video.width.max(1) as f32
+    }
+
     /// The stroke in flight as the stage draws it: path commands over a
-    /// 1000 × 1000 viewbox, the line's width as a fraction of the stage,
+    /// viewbox 1000 across and [`Self::stage_tall`] down, the line's width as a fraction of the stage,
     /// and whether it is taking away. Empty between strokes.
     fn stroke_overlay(&self) -> (String, f32, bool) {
         if let Some(drawing) = self.draw_overlay() {
@@ -11690,11 +11703,12 @@ Veredicto del modelo de juego: {} — {}",
         let Some((first, rest)) = screen.split_first() else {
             return (String::new(), 0.0, false);
         };
-        let mut path = format!("M {:.1} {:.1}", first.0 * 1000.0, first.1 * 1000.0);
+        let tall = self.stage_tall();
+        let mut path = format!("M {:.1} {:.1}", first.0 * 1000.0, first.1 * tall);
         // A single press still draws a dot: a line to where it already is,
         // with round caps.
         for (x, y) in rest.iter().chain(rest.is_empty().then_some(first)) {
-            path.push_str(&format!(" L {:.1} {:.1}", x * 1000.0, y * 1000.0));
+            path.push_str(&format!(" L {:.1} {:.1}", x * 1000.0, y * tall));
         }
         // The brush is `size` of the picture's width; on the stage that is
         // `size` of the picture's footprint.
