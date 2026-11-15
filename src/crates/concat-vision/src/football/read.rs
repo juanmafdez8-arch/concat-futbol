@@ -43,6 +43,8 @@ const PROGRESSIVE_M: f64 = 10.0;
 const HIGH_SPEED_KMH: f64 = 16.0;
 const SPRINT_KMH: f64 = 20.0;
 const MAX_KMH: f64 = 33.0;
+/// The instants running a sprint is held for before it counts: a second.
+const SPRINT_HOLD: u32 = 5;
 /// The pitch, in metres.
 const LENGTH: f64 = 105.0;
 const WIDTH: f64 = 68.0;
@@ -214,7 +216,7 @@ pub fn passes(ctx: &Context, team: u8, from_ms: u64, to_ms: u64) -> Vec<Pass> {
 /// second, so the tracking's jitter does not read as running.
 pub fn physical(ctx: &Context, team: u8, from_ms: u64, to_ms: u64) -> Physical {
     let mut out = Physical::default();
-    let mut seen: HashMap<u32, (VecDeque<(u64, (f64, f64))>, bool)> = HashMap::new();
+    let mut seen: HashMap<u32, (VecDeque<(u64, (f64, f64))>, u32)> = HashMap::new();
     let start = ctx.snaps.partition_point(|s| s.ms < from_ms);
     for snap in ctx.snaps[start..].iter().take_while(|s| s.ms <= to_ms) {
         for player in snap.players.iter().filter(|p| p.team == team && !p.keeper) {
@@ -222,7 +224,7 @@ pub fn physical(ctx: &Context, team: u8, from_ms: u64, to_ms: u64) -> Physical {
             // Out of sight for a while: a new run of instants.
             if trail.back().is_some_and(|(ms, _)| snap.ms.saturating_sub(*ms) > 600) {
                 trail.clear();
-                *sprinting = false;
+                *sprinting = 0;
             }
             let step_ms = trail.back().map(|(ms, _)| snap.ms.saturating_sub(*ms));
             trail.push_back((snap.ms, player.at));
@@ -246,11 +248,12 @@ pub fn physical(ctx: &Context, team: u8, from_ms: u64, to_ms: u64) -> Physical {
             if kmh >= HIGH_SPEED_KMH {
                 out.high_speed_m += covered;
             }
-            let sprint = kmh >= SPRINT_KMH;
-            if sprint && !*sprinting {
+            // A sprint is the speed held, not touched: one counts at its
+            // [`SPRINT_HOLD`]th instant running, and once.
+            *sprinting = if kmh >= SPRINT_KMH { *sprinting + 1 } else { 0 };
+            if *sprinting == SPRINT_HOLD {
                 out.sprints += 1;
             }
-            *sprinting = sprint;
         }
     }
     out

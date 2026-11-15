@@ -8382,7 +8382,7 @@ impl Studio {
     // run here against the studio as it is, and its answer handed back.
 
     /// What the assistant is told it is and how to behave.
-    const ASSISTANT_SYSTEM: &'static str = "Eres el asistente de análisis de Concat Fútbol, un editor de vídeo para analistas y entrenadores de fútbol. Respondes siempre en español, breve y concreto.
+    const ASSISTANT_SYSTEM: &'static str = "Eres el asistente de análisis de Concat Fútbol, un editor de vídeo para analistas y entrenadores de fútbol. Respondes siempre en español, breve y concreto, en texto llano: sin Markdown, sin asteriscos ni almohadillas. Cada petición es nueva: aunque antes fallara una herramienta, vuelve a llamarla.
 
 Actúa directamente: si la petición se entiende, llama a la herramienta sin pedir confirmación. Pregunta solo si falta un dato imprescindible. Nunca inventes datos ni resultados: los sacas de las herramientas.
 
@@ -8756,9 +8756,9 @@ Acciones evaluables: Presión tras pérdida, Repliegue, Salida de balón, Bloque
                 self.read_game(at, to)
             }
             "resumen_tactico" => {
-                match self.footage_at(f64::from(self.playhead)) {
+                match self.footage_near(f64::from(self.playhead)) {
                     Some(clip) => self.read_game(clip.start, Some(clip.start + clip.duration)),
-                    None => "No hay vídeo bajo el cabezal".into(),
+                    None => "No hay ningún vídeo en la línea de tiempo".into(),
                 }
             }
             "leer_jugada" => {
@@ -9368,9 +9368,10 @@ Veredicto del modelo de juego: {} — {}",
     /// read from the judged team's side for the assistant.
     fn read_game(&self, at: f64, to: Option<f64>) -> String {
         use concat_vision::football::read;
-        let Some(clip) = self.footage_at(at) else {
-            return "No hay vídeo en ese punto de la línea de tiempo".into();
+        let Some(clip) = self.footage_near(at) else {
+            return "No hay ningún vídeo en la línea de tiempo".into();
         };
+        let at = at.clamp(clip.start, clip.start + clip.duration);
         let Some(context) = self.eval_context(&clip.id) else {
             return "Ese vídeo no está analizado y calibrado: analiza los jugadores y calibra el campograma primero".into();
         };
@@ -9387,6 +9388,22 @@ Veredicto del modelo de juego: {} — {}",
                 None => "Sin datos de campo en ese instante (fuera del tramo analizado o sin calibrar)".into(),
             },
         }
+    }
+
+    /// The footage under timeline second `at`, or the nearest to it: a
+    /// playhead resting just off a clip still means that clip.
+    fn footage_near(&self, at: f64) -> Option<Clip> {
+        self.footage_at(at).or_else(|| {
+            self.timeline()
+                .clips
+                .iter()
+                .filter(|clip| clip.kind == model::ClipKind::Video)
+                .min_by(|a, b| {
+                    let gap = |clip: &Clip| (clip.start - at).abs().min((clip.start + clip.duration - at).abs());
+                    gap(a).total_cmp(&gap(b))
+                })
+                .map(|clip| (**clip).clone())
+        })
     }
 
     /// The footage under timeline second `at`.

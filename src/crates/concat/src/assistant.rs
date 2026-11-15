@@ -170,7 +170,7 @@ pub fn parse_claude(value: &Value) -> Result<Turn, String> {
         match block.get("type").and_then(Value::as_str) {
             Some("text") => {
                 if let Some(text) = block.get("text").and_then(Value::as_str) {
-                    parts.push(Part::Text(text.to_owned()));
+                    parts.push(Part::Text(plain(text)));
                 }
             }
             Some("tool_use") => parts.push(Part::Call {
@@ -216,6 +216,18 @@ pub fn ollama_body(config: &Config, system: &str, history: &[Turn], tools: &[Too
     body
 }
 
+/// A reply as the pane shows it: the pane draws no Markdown, so the marks
+/// of bold and of headings would show as themselves.
+fn plain(text: &str) -> String {
+    text.replace("**", "")
+        .replace("__", "")
+        .lines()
+        .map(|line| if line.starts_with('#') { line.trim_start_matches('#').trim_start() } else { line })
+        .collect::<Vec<_>>()
+        .join("
+")
+}
+
 /// A reply with any `<think>…</think>` a model left in it taken out.
 fn without_thinking(text: &str) -> String {
     let mut out = text.to_owned();
@@ -225,7 +237,7 @@ fn without_thinking(text: &str) -> String {
         }
         out.replace_range(a..b + "</think>".len(), "");
     }
-    out.trim().to_owned()
+    plain(out.trim())
 }
 
 /// Parses an Ollama chat response into an assistant turn.
