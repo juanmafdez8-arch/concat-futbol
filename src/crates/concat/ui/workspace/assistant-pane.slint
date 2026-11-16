@@ -222,12 +222,12 @@ export component AssistantPane inherits Pane {
                 spacing: 6px;
                 alignment: start;
                 Chip {
-                    label: "Leer instante";
+                    label: "Instante";
                     enabled: !Editor.assistant-busy;
                     clicked => { Editor.assistant-send("Lee el juego en este instante y explícamelo como analista."); }
                 }
                 Chip {
-                    label: "Resumen táctico";
+                    label: "Resumen";
                     enabled: !Editor.assistant-busy;
                     clicked => { Editor.assistant-send("Hazme el resumen táctico y físico de este clip y dime las tres conclusiones más importantes."); }
                 }

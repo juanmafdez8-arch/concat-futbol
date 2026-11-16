@@ -300,7 +300,10 @@ pub fn analysis_dock() -> Dock {
         ratio: 0.84,
         first: Box::new(Dock::Split {
             columns: true,
-            ratio: 0.79,
+            // The picture is as tall as the seat lets it be and no wider
+            // than its shape allows, so past this share the seat beside it
+            // takes room the picture could not use.
+            ratio: 0.7,
             first: Dock::leaf(PaneKind::Preview),
             second: Dock::leaf(PaneKind::Assistant),
         }),

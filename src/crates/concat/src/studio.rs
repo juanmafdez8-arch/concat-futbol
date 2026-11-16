@@ -15776,7 +15776,10 @@ Veredicto del modelo de juego: {} — {}",
                 let after = self.sole_selection();
                 self.paste_clips(after.as_deref());
             }
-            _ => {}
+            // The Montage and View menus' keys - Q W I O X E R P [ ] J L V,
+            // T and F - which read their own ids. They were listed under
+            // the clip menu's verbs, where no key reaches, and did nothing.
+            other => self.montage_action(other),
         }
     }
 
