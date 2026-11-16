@@ -141,13 +141,18 @@ export global Theme {
     // ── shape ────────────────────────────────────────────────────────────
     //
     // radii
-    out property <length> r-xs: broadcast ? 2px : 3px;
-    out property <length> r-sm: broadcast ? 4px : 5px;
-    out property <length> r: broadcast ? 5px : 7px;
-    out property <length> r-lg: broadcast ? 8px : 12px;
+    /// The bubble shape: the broadcast theme under its Burbuja image, where
+    /// panels float as rounded cards and every control is a pill. A shape
+    /// and not a palette, so it is asked for by name where a corner or a
+    /// switch is drawn differently, and the radii below answer for the rest.
+    out property <bool> bubble: broadcast && Broadcast.look == 4;
+    out property <length> r-xs: bubble ? 6px : broadcast ? 2px : 3px;
+    out property <length> r-sm: bubble ? 9px : broadcast ? 4px : 5px;
+    out property <length> r: bubble ? 13px : broadcast ? 5px : 7px;
+    out property <length> r-lg: bubble ? 18px : broadcast ? 8px : 12px;
     /// The dialog sheet, and nothing smaller. A modal is the largest rounded
     /// thing in the window and wants a corner to match.
-    out property <length> r-xl: broadcast ? 12px : 16px;
+    out property <length> r-xl: bubble ? 24px : broadcast ? 12px : 16px;
 
     // metrics
     out property <length> h: 28px;        // standard control height

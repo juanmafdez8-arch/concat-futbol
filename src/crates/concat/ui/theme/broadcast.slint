@@ -16,27 +16,29 @@ export global Broadcast {
     /// graphite with the pitch's green in it; 1 Estudio, a neutral graphite
     /// that leaves the footage's colours alone, as a grading suite does;
     /// 2 Pizarra, the navy of a tactics board; 3 Carbono, near black and
-    /// high in contrast, for a projector or a dim room. Only the grounds,
+    /// high in contrast, for a projector or a dim room; 4 Burbuja, Césped's
+    /// colours a step lifted and all but borderless, for the rounded shape
+    /// the theme takes under it (theme.slint, `bubble`). Only the grounds,
     /// the lines and the inks move with it: the accents, the kinds and the
     /// meter are the palette's own under every one.
     in-out property <int> look: 1;
-    out property <color> panel: look == 1 ? #1b1c1f : look == 2 ? #131b2a : look == 3 ? #111111 : #141d18;
-    out property <color> raised: look == 1 ? #232529 : look == 2 ? #19243a : look == 3 ? #181818 : #1a2620;
-    out property <color> well: look == 1 ? #131416 : look == 2 ? #0c1220 : look == 3 ? #080808 : #0e1511;
-    out property <color> field: look == 1 ? #2a2c31 : look == 2 ? #1f2c45 : look == 3 ? #1f1f1f : #202f28;
-    out property <color> field-hover: look == 1 ? #33363c : look == 2 ? #283856 : look == 3 ? #2a2a2a : #283b32;
-    out property <color> field-active: look == 1 ? #3e4148 : look == 2 ? #324567 : look == 3 ? #363636 : #32493e;
-    out property <color> launch-page: look == 1 ? #0d0e0f : look == 2 ? #070b14 : look == 3 ? #000000 : #090e0b;
-    out property <color> launch-panel: look == 1 ? #131416 : look == 2 ? #0c1220 : look == 3 ? #080808 : #0e1511;
-    out property <color> launch-well: look == 1 ? #101112 : look == 2 ? #090e19 : look == 3 ? #050505 : #0b110e;
-    out property <color> launch-raised: look == 1 ? #1b1c1f : look == 2 ? #131b2a : look == 3 ? #111111 : #141d18;
-    out property <color> launch-field: look == 1 ? #232529 : look == 2 ? #19243a : look == 3 ? #181818 : #1a2620;
-    out property <color> launch-field-active: look == 1 ? #2e3035 : look == 2 ? #233150 : look == 3 ? #242424 : #24352c;
-    out property <color> line: look == 1 ? #ffffff14 : look == 2 ? #dfe8ff17 : look == 3 ? #ffffff1c : #eaf3ec17;
-    out property <color> line-strong: look == 1 ? #ffffff2b : look == 2 ? #dfe8ff30 : look == 3 ? #ffffff38 : #eaf3ec30;
-    out property <color> fg: look == 1 ? #ecedef : look == 2 ? #e8eefc : look == 3 ? #f5f5f5 : #eaf3ec;
-    out property <color> fg-muted: look == 1 ? #a3a7ae : look == 2 ? #9cabc7 : look == 3 ? #a8a8a8 : #a1b3a8;
-    out property <color> fg-dim: look == 1 ? #6f747c : look == 2 ? #677795 : look == 3 ? #707070 : #6d8376;
+    out property <color> panel: look == 1 ? #1b1c1f : look == 2 ? #131b2a : look == 3 ? #111111 : look == 4 ? #18221c : #141d18;
+    out property <color> raised: look == 1 ? #232529 : look == 2 ? #19243a : look == 3 ? #181818 : look == 4 ? #202d26 : #1a2620;
+    out property <color> well: look == 1 ? #131416 : look == 2 ? #0c1220 : look == 3 ? #080808 : look == 4 ? #0e1511 : #0e1511;
+    out property <color> field: look == 1 ? #2a2c31 : look == 2 ? #1f2c45 : look == 3 ? #1f1f1f : look == 4 ? #27372f : #202f28;
+    out property <color> field-hover: look == 1 ? #33363c : look == 2 ? #283856 : look == 3 ? #2a2a2a : look == 4 ? #2f4338 : #283b32;
+    out property <color> field-active: look == 1 ? #3e4148 : look == 2 ? #324567 : look == 3 ? #363636 : look == 4 ? #395044 : #32493e;
+    out property <color> launch-page: look == 1 ? #0d0e0f : look == 2 ? #070b14 : look == 3 ? #000000 : look == 4 ? #090e0b : #090e0b;
+    out property <color> launch-panel: look == 1 ? #131416 : look == 2 ? #0c1220 : look == 3 ? #080808 : look == 4 ? #101813 : #0e1511;
+    out property <color> launch-well: look == 1 ? #101112 : look == 2 ? #090e19 : look == 3 ? #050505 : look == 4 ? #0b110e : #0b110e;
+    out property <color> launch-raised: look == 1 ? #1b1c1f : look == 2 ? #131b2a : look == 3 ? #111111 : look == 4 ? #18221c : #141d18;
+    out property <color> launch-field: look == 1 ? #232529 : look == 2 ? #19243a : look == 3 ? #181818 : look == 4 ? #202d26 : #1a2620;
+    out property <color> launch-field-active: look == 1 ? #2e3035 : look == 2 ? #233150 : look == 3 ? #242424 : look == 4 ? #2a3b32 : #24352c;
+    out property <color> line: look == 1 ? #ffffff14 : look == 2 ? #dfe8ff17 : look == 3 ? #ffffff1c : look == 4 ? #eaf3ec10 : #eaf3ec17;
+    out property <color> line-strong: look == 1 ? #ffffff2b : look == 2 ? #dfe8ff30 : look == 3 ? #ffffff38 : look == 4 ? #eaf3ec26 : #eaf3ec30;
+    out property <color> fg: look == 1 ? #ecedef : look == 2 ? #e8eefc : look == 3 ? #f5f5f5 : look == 4 ? #eaf3ec : #eaf3ec;
+    out property <color> fg-muted: look == 1 ? #a3a7ae : look == 2 ? #9cabc7 : look == 3 ? #a8a8a8 : look == 4 ? #a1b3a8 : #a1b3a8;
+    out property <color> fg-dim: look == 1 ? #6f747c : look == 2 ? #677795 : look == 3 ? #707070 : look == 4 ? #6d8376 : #6d8376;
     out property <color> fg-hot: #ffffff;
 
     // accents: the dark palette's, in its order, and gold last - the
@@ -70,10 +72,10 @@ export global Broadcast {
     out property <color> kind-filter-well: #23204a;
     out property <color> kind-shape: #d4a24b;
     out property <color> kind-shape-well: #3a2d14;
-    out property <color> lane: look == 1 ? #16171a : look == 2 ? #0f1624 : look == 3 ? #0b0b0b : #101813;
-    out property <color> lane-alt: look == 1 ? #191a1d : look == 2 ? #121a2b : look == 3 ? #0f0f0f : #131c17;
-    out property <color> ruler: look == 1 ? #121315 : look == 2 ? #0b111d : look == 3 ? #070707 : #0d1410;
-    out property <color> grid: look == 1 ? #ffffff12 : look == 2 ? #dfe8ff14 : look == 3 ? #ffffff14 : #eaf3ec14;
+    out property <color> lane: look == 1 ? #16171a : look == 2 ? #0f1624 : look == 3 ? #0b0b0b : look == 4 ? #111a15 : #101813;
+    out property <color> lane-alt: look == 1 ? #191a1d : look == 2 ? #121a2b : look == 3 ? #0f0f0f : look == 4 ? #141e18 : #131c17;
+    out property <color> ruler: look == 1 ? #121315 : look == 2 ? #0b111d : look == 3 ? #070707 : look == 4 ? #0e1511 : #0d1410;
+    out property <color> grid: look == 1 ? #ffffff12 : look == 2 ? #dfe8ff14 : look == 3 ? #ffffff14 : look == 4 ? #eaf3ec10 : #eaf3ec14;
     out property <color> playhead: #ffd23f;
     out property <color> wave: #a7f0c2b3;
     out property <color> wave-video: #a9c8f5b3;
@@ -88,7 +90,7 @@ export global Broadcast {
     out property <color> transition-out: #ffffff73;
     out property <color> stage: #000000;
     out property <color> on-stage-dim: #ffffff6b;
-    out property <color> sample-ground: look == 1 ? #25272b : look == 2 ? #1b2740 : look == 3 ? #1c1c1c : #1c2a23;
+    out property <color> sample-ground: look == 1 ? #25272b : look == 2 ? #1b2740 : look == 3 ? #1c1c1c : look == 4 ? #1c2a23 : #1c2a23;
     out property <color> overlay: #00000099;
     out property <color> scrim: #0000008c;
     out property <color> on-scrim: #ffffff;
@@ -96,6 +98,6 @@ export global Broadcast {
     out property <color> danger-soft: #ff5a5f24;
     out property <color> danger-wash: #2a1416;
     out property <color> danger-edge: #5a2b2e;
-    out property <color> page: look == 1 ? #0e0f10 : look == 2 ? #080c16 : look == 3 ? #030303 : #0a100d;
-    out property <color> page-fg-muted: look == 1 ? #a3a7ae : look == 2 ? #9cabc7 : look == 3 ? #a8a8a8 : #a1b3a8;
+    out property <color> page: look == 1 ? #0e0f10 : look == 2 ? #080c16 : look == 3 ? #030303 : look == 4 ? #0a100d : #0a100d;
+    out property <color> page-fg-muted: look == 1 ? #a3a7ae : look == 2 ? #9cabc7 : look == 3 ? #a8a8a8 : look == 4 ? #a1b3a8 : #a1b3a8;
 }

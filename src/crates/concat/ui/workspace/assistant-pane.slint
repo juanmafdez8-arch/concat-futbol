@@ -26,7 +26,7 @@ component Bubble inherits Rectangle {
     Rectangle {
         x: root.indent;
         width: root.width - root.indent;
-        border-radius: 10px;
+        border-radius: Theme.bubble ? 16px : 10px;
         background: root.line.role == 0 ? Theme.accent.with-alpha(0.18)
             : root.line.role == 2 ? #e74c3c26 : Theme.field;
         border-width: 1px;

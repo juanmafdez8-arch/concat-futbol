@@ -126,7 +126,7 @@ export component SectionHeader inherits Rectangle {
             Rectangle {
                 width: 16px;
                 height: 16px;
-                border-radius: 4px;
+                border-radius: Theme.bubble ? 8px : 4px;
                 background: root.on ? Theme.accent : Theme.field-active;
                 opacity: root.switch-enabled ? 1.0 : 0.45;
 

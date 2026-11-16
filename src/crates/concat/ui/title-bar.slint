@@ -215,6 +215,10 @@ export component TitleBar inherits Rectangle {
         if Theme.broadcast: Rectangle {
             width: plate.preferred-width + 24px;
             background: Theme.accent;
+            // Under the bubble shape the plate is a pill, rounded on the
+            // side that meets the menus.
+            border-top-right-radius: Theme.bubble ? self.height / 2 : 0px;
+            border-bottom-right-radius: Theme.bubble ? self.height / 2 : 0px;
 
             plate := Text {
                 x: 12px;
