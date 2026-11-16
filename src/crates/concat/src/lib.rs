@@ -217,6 +217,8 @@ pub fn run() -> Result<(), slint::PlatformError> {
     app.global::<Theme>().set_dark(dark);
     let broadcast = studio.prefs.broadcast.unwrap_or(true);
     app.global::<Theme>().set_broadcast(broadcast);
+    app.global::<Broadcast>()
+        .set_look(studio.prefs.look.unwrap_or(1).clamp(0, 3));
     // The accent is remembered by name and the names live on the Theme
     // global, so the index is looked up there rather than kept in Rust too.
     // A remembered hex is a colour picked by hand, which is the slot past
@@ -1574,6 +1576,19 @@ pub fn run() -> Result<(), slint::PlatformError> {
                 let mut studio = shell.studio.borrow_mut();
                 studio.prefs.dark = Some(dark);
                 studio.prefs.broadcast = Some(broadcast);
+                studio.prefs.save(&studio.host.dirs);
+            });
+        }
+    });
+    // The broadcast theme's image is already on the palette when this is
+    // heard - the dialog sets it, so the window retones under the pointer -
+    // and only wants remembering.
+    app.on_settings_look_changed({
+        move |look| {
+            log::info!("settings: look {look}");
+            Shell::with(|shell, _app| {
+                let mut studio = shell.studio.borrow_mut();
+                studio.prefs.look = Some(look.clamp(0, 3));
                 studio.prefs.save(&studio.host.dirs);
             });
         }

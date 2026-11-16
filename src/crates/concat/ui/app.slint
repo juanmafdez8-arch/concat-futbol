@@ -24,6 +24,7 @@ import "../../concat-text/fonts/BarlowCondensed-Bold.ttf";
 import "../../concat-text/fonts/BarlowCondensed-ExtraBold.ttf";
 
 import { Theme } from "theme/theme.slint";
+import { Broadcast } from "theme/broadcast.slint";
 import { Bezier, Curves, Fmt, Focus, Payload } from "util.slint";
 import { EffectData } from "demo/effects-panel.slint";
 import { MediaFilter, MediaItemData, MediaKind, SourcePreview, TextPresetData } from "workspace/media-pane.slint";
@@ -60,7 +61,7 @@ import {
 import { KeyEditor, KeyMarkData, KeyRowData } from "workspace/keyframes-pane.slint";
 
 export {
-    Curves, Fmt, Focus, Payload, Theme, Bezier, Editor, I18n,
+    Curves, Fmt, Focus, Payload, Theme, Broadcast, Bezier, Editor, I18n,
     AppliedEntryData, AppliedParamData, CatalogueEntryData, Library, LibraryViewData, ParamFormat,
     DockDivider, DockSide, PaneKind, SeatBox,
     EffectData, FontSearch, Meters, MediaFilter, MediaItemData, MediaKind, SourcePreview, TextPresetData,
@@ -255,6 +256,7 @@ export component App inherits Window {
     callback settings-language-changed(index: int);
     callback settings-log-level-changed(index: int);
     callback settings-theme-changed(dark: bool, broadcast: bool);
+    callback settings-look-changed(look: int);
     callback settings-accent-changed(index: int);
     callback settings-accent-custom-changed(colour: color);
     callback settings-playhead-changed(colour: color);
@@ -793,6 +795,7 @@ export component App inherits Window {
         language-changed(index) => { root.settings-language-changed(index); }
         log-level-changed(index) => { root.settings-log-level-changed(index); }
         theme-changed(dark, broadcast) => { root.settings-theme-changed(dark, broadcast); }
+        look-changed(look) => { root.settings-look-changed(look); }
         accent-changed(index) => { root.settings-accent-changed(index); }
         accent-custom-changed(colour) => { root.settings-accent-custom-changed(colour); }
         playhead-changed(colour) => { root.settings-playhead-changed(colour); }

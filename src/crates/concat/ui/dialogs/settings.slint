@@ -3,6 +3,7 @@
 
 import { I18n } from "../i18n.slint";
 import { Theme } from "../theme/theme.slint";
+import { Broadcast } from "../theme/broadcast.slint";
 import { NumberField } from "../primitives/number-field.slint";
 import { Glyph, Icon } from "../icons.slint";
 import { Button, DialogSection, Field, Modal, Progress } from "../primitives/modal.slint";
@@ -437,6 +438,7 @@ export component SettingsDialog inherits Modal {
     /// say "the other one"; a page with two named options can say which one is
     /// on, which is the whole reason it moved in here.
     callback theme-changed(dark: bool, broadcast: bool);
+    callback look-changed(look: int);
     /// The accent, as an index into `Theme.accent-names`.
     callback accent-changed(index: int);
     /// A colour picked by hand in place of any on the list.
@@ -751,6 +753,22 @@ export component SettingsDialog inherits Modal {
                         ];
                         current: Theme.broadcast ? 2 : Theme.dark ? 0 : 1;
                         changed(index) => { root.theme-changed(index != 1, index == 2); }
+                    }
+                }
+
+                // The broadcast theme's image: the same theme in another
+                // ground. Set on the palette here, so the window retones at
+                // once, and sent out to be remembered.
+                if Theme.broadcast: DialogSection {
+                    title: "Imagen";
+
+                    SegmentedControl {
+                        options: ["Césped", "Estudio", "Pizarra", "Carbono"];
+                        current: Broadcast.look;
+                        changed(index) => {
+                            Broadcast.look = index;
+                            root.look-changed(index);
+                        }
                     }
                 }
 

@@ -20,6 +20,9 @@ pub struct Preferences {
     /// The broadcast theme, "Retransmisión", in place of Dark or Light.
     /// `None` is this build's default, which is on.
     pub broadcast: Option<bool>,
+    /// The broadcast theme's image, by its number on the palette
+    /// (broadcast.slint, `look`). `None` is this build's default, Estudio.
+    pub look: Option<i32>,
     /// The accent, by the lower-cased name the theme lists it under —
     /// "lime", "sky", ... — or as "#rrggbb" for a colour picked by hand.
     /// `None`, or a name no longer on the list, is the first one, which is
