@@ -601,6 +601,10 @@ export component App inherits Window {
             if (letter == "k") { Editor.play-toggled(); return accept; }
             if (letter == "l") { Editor.shortcut("forward-five"); return accept; }
             if (letter == "v") { Editor.shortcut("pointer-tool"); return accept; }
+            // F is cinema - the monitor alone in the window, and back - and
+            // T the analysis workspace, the picture first.
+            if (letter == "f") { Editor.shortcut("workspace-cinema"); return accept; }
+            if (letter == "t") { Editor.shortcut("workspace-analysis"); return accept; }
             if (letter == "q") { Editor.shortcut("delete-left"); return accept; }
             if (letter == "w") { Editor.shortcut("delete-right"); return accept; }
             if (letter == "i") { Editor.shortcut("mark-in"); return accept; }

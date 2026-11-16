@@ -1031,6 +1031,8 @@ pub struct Studio {
     football_pending: Option<(String, f32, f32, f64, model::MarkStyle)>,
     /// The dock the analysis workspace replaced, while it is showing.
     dock_before_analysis: Option<Dock>,
+    /// The dock cinema replaced, to put back when it is left.
+    dock_before_cinema: Option<Dock>,
     /// A pitch calibration being made: its clip, its source instant, its
     /// pairs `[u, v, x, y]`, and a video point waiting for its landmark.
     calibrating: Option<(String, u64, Vec<[f64; 4]>, Option<(f64, f64)>)>,
@@ -2244,6 +2246,7 @@ impl Studio {
             analysis_colour: 3,
             football_pending: None,
             dock_before_analysis: None,
+            dock_before_cinema: None,
             calibrating: None,
             board_cache: RefCell::new(None),
             tag_current: None,
@@ -7188,6 +7191,10 @@ impl Studio {
     /// large, the tagging pane and the inspector beside it, the timeline
     /// along the bottom - the layout every analysis tool opens with.
     pub fn toggle_analysis_workspace(&mut self) {
+        // Out of cinema first, so what is kept and put back is a workspace.
+        if let Some(before) = self.dock_before_cinema.take() {
+            self.dock = before;
+        }
         match self.dock_before_analysis.take() {
             Some(before) => self.dock = before,
             None => {
@@ -7197,6 +7204,25 @@ impl Studio {
                 ));
             }
         }
+    }
+
+    /// Cinema, or back to the workspace it covered: the monitor alone in
+    /// the window.
+    pub fn toggle_cinema(&mut self) {
+        match self.dock_before_cinema.take() {
+            Some(before) => self.dock = before,
+            None => {
+                self.dock_before_cinema = Some(std::mem::replace(
+                    &mut self.dock,
+                    crate::dock::cinema_dock(),
+                ));
+            }
+        }
+    }
+
+    /// Whether the window is in cinema.
+    pub fn cinema(&self) -> bool {
+        self.dock_before_cinema.is_some()
     }
 
     /// Whether the analysis workspace is the one showing.
@@ -10442,6 +10468,7 @@ Veredicto del modelo de juego: {} — {}",
             "play-next" => self.jump_play(true),
             "highlights" => self.build_highlights(None),
             "workspace-analysis" => self.toggle_analysis_workspace(),
+            "workspace-cinema" => self.toggle_cinema(),
             "pointer-tool" => self.analysis_tool_pick(0),
             "back-five" => {
                 let at = (self.playhead - 5.0).max(0.0);
@@ -15523,6 +15550,7 @@ Veredicto del modelo de juego: {} — {}",
                     &t("bar.workspace"),
                     self.analysis_workspace(),
                 ),
+                check("workspace-cinema", "Modo cine · F", self.cinema()),
             ],
             3 => self.montage_menu(),
             _ => Vec::new(),
@@ -15819,7 +15847,7 @@ Veredicto del modelo de juego: {} — {}",
             // Q W I O X E R P [ ]: the Montage menu's keys.
             "delete-left" | "delete-right" | "mark-in" | "mark-out" | "clear-marks" | "extract"
             | "lift" | "play-add" | "play-prev" | "play-next" | "pointer-tool" | "back-five"
-            | "forward-five" => self.montage_action(action),
+            | "forward-five" | "workspace-analysis" | "workspace-cinema" => self.montage_action(action),
             _ => {}
         }
     }

@@ -290,22 +290,28 @@ pub fn analysis_dock() -> Dock {
     // The picture as large as it goes, the pitch board beside it, and a
     // slim timeline under both; tagging and the inspector are a switch
     // away on either seat.
+    //
+    // The picture first: one slim seat beside it - the assistant, with the
+    // board, tagging and the inspector a switch away on it - and the
+    // timeline as low as a seat goes, so the picture has some seven tenths
+    // of the window where the editing layout gives it under three.
     Dock::Split {
         columns: false,
-        ratio: 0.8,
+        ratio: 0.84,
         first: Box::new(Dock::Split {
             columns: true,
-            ratio: 0.68,
+            ratio: 0.79,
             first: Dock::leaf(PaneKind::Preview),
-            second: Box::new(Dock::Split {
-                columns: false,
-                ratio: 0.55,
-                first: Dock::leaf(PaneKind::Pitch),
-                second: Dock::leaf(PaneKind::Assistant),
-            }),
+            second: Dock::leaf(PaneKind::Assistant),
         }),
         second: Dock::leaf(PaneKind::Timeline),
     }
+}
+
+/// Cinema: the monitor and nothing else, for showing a play to a room. Its
+/// own toolbar and transport are on it, so it is still worked in.
+pub fn cinema_dock() -> Dock {
+    Dock::Leaf(PaneKind::Preview)
 }
 
 /// The top edge of a row, measured down the stack from the first lane.
