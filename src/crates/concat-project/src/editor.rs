@@ -199,6 +199,7 @@ impl Editor {
         }
         self.tidy_touched(&before);
         self.follow_first_hdr(&before);
+        self.follow_first_rate(&before);
         let continues = match (gesture, self.undo.back()) {
             (Some(gesture), Some(last)) => last.gesture.as_deref() == Some(gesture),
             _ => false,
@@ -247,6 +248,59 @@ impl Editor {
                     *clip = Arc::new(tidied);
                 }
             }
+        }
+    }
+
+    /// Gives a timeline the frame rate of the first video put on it, in the
+    /// same step: a match filmed at 25 played on a 24 timeline drops a
+    /// frame every second, and that judder is what playback was blamed
+    /// for. Only a timeline that had no video clip before the command and
+    /// has one after it is looked at, so a rate chosen later in the Modify
+    /// sheet stays chosen.
+    fn follow_first_rate(&mut self, before: &Project) {
+        use std::sync::Arc;
+        let previous: std::collections::HashMap<&str, &Arc<crate::model::Timeline>> = before
+            .timelines
+            .iter()
+            .map(|timeline| (timeline.id.as_str(), timeline))
+            .collect();
+        let rate_of = |media_id: &str| -> Option<(i64, i64)> {
+            let media = self.project.media.iter().find(|media| media.id == media_id)?;
+            let fraction = media.frame_rate_fraction.as_deref()?;
+            let (num, den) = fraction.split_once('/').unwrap_or((fraction, "1"));
+            let (num, den) = (num.trim().parse::<i64>().ok()?, den.trim().parse::<i64>().ok()?);
+            // A still or a probe that read nonsense names no rate.
+            (num > 0 && den > 0 && (num as f64 / den as f64) >= 10.0 && (num as f64 / den as f64) <= 121.0)
+                .then_some((num, den))
+        };
+        let mut changes = Vec::new();
+        for (index, timeline) in self.project.timelines.iter().enumerate() {
+            let Some(old) = previous.get(timeline.id.as_str()).copied() else {
+                continue;
+            };
+            if Arc::ptr_eq(old, timeline)
+                || old.clips.iter().any(|clip| clip.kind == crate::model::ClipKind::Video)
+            {
+                continue;
+            }
+            let Some(first) = timeline
+                .clips
+                .iter()
+                .filter(|clip| clip.kind == crate::model::ClipKind::Video)
+                .min_by(|a, b| a.start.total_cmp(&b.start))
+            else {
+                continue;
+            };
+            if let Some((num, den)) = rate_of(&first.media_id)
+                && (num, den) != (timeline.video.rate_num, timeline.video.rate_den)
+            {
+                changes.push((index, num, den));
+            }
+        }
+        for (index, num, den) in changes {
+            let video = &mut Arc::make_mut(&mut self.project.timelines[index]).video;
+            video.rate_num = num;
+            video.rate_den = den;
         }
     }
 
