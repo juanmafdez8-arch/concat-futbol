@@ -6437,6 +6437,20 @@ impl Studio {
                 Arc::clone(numbers),
             ));
         }
+        // Only the calibration changed - a point placed, a dot dragged -
+        // and the camera's motion, measured over the whole match from the
+        // tracks alone, is what it was: kept, and the calibration read
+        // again. Measuring it afresh on every point froze the window.
+        if let Some((held, motion, _, numbers)) = cache.as_ref()
+            && held.0 == key.0
+            && held.1 == key.1
+            && held.3 == key.3
+        {
+            let calibration = concat_vision::football::pitch::Calibration::load(&dir);
+            let out = (set, Arc::clone(motion), calibration.clone(), Arc::clone(numbers));
+            *cache = Some((key, out.1.clone(), calibration, out.3.clone()));
+            return Some(out);
+        }
         let motion = Arc::new(concat_vision::football::pitch::Motion::of(&set));
         let calibration = concat_vision::football::pitch::Calibration::load(&dir);
         // Each team's numbers: its players by id, 1 upward, so a number
@@ -6852,7 +6866,11 @@ impl Studio {
         ];
         let ms = (seconds.max(0.0) * 1000.0).round() as u64;
         let mut calibration = pitch::Calibration::load(&dir);
-        let motion = pitch::Motion::of(&set);
+        // The board's own motion, kept between drags: measuring it over
+        // the whole match on every drag is what froze the window.
+        let Some((_, motion, _, _)) = self.board_state(&clip.id) else {
+            return;
+        };
         let here = calibration
             .anchors
             .iter()
