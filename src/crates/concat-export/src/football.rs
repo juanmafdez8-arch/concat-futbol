@@ -157,9 +157,23 @@ impl FootballJob {
         };
         let seconds = source_time.as_f64();
         let sketches = self.sketches(set.as_deref(), seconds, time.as_f64() - self.start);
+        // The marks whose stretch this instant is in, faded at its edges.
+        let local = time.as_f64() - self.start;
+        let showing: Vec<FootballMark> = self
+            .marks
+            .iter()
+            .filter_map(|mark| {
+                let shown = mark.shown_at(local);
+                (shown > 0.0).then(|| {
+                    let mut mark = mark.clone();
+                    mark.strength *= shown;
+                    mark
+                })
+            })
+            .collect();
         let marked = set
             .as_deref()
-            .and_then(|set| self.draw_marks(frame, set, seconds));
+            .and_then(|set| self.draw_marks(frame, set, seconds, &showing));
         if sketches.is_empty() {
             return marked;
         }
@@ -222,15 +236,20 @@ impl FootballJob {
 
     /// The frame with the football marks drawn, or `None` when there is
     /// nothing to draw at this instant.
-    fn draw_marks(&self, frame: &Frame, set: &TrackSet, seconds: f64) -> Option<Frame> {
-        if self.marks.is_empty() && !self.picking {
+    fn draw_marks(
+        &self,
+        frame: &Frame,
+        set: &TrackSet,
+        seconds: f64,
+        showing: &[FootballMark],
+    ) -> Option<Frame> {
+        if showing.is_empty() && !self.picking {
             return None;
         }
         let boxes = set.at(seconds);
         let boxes_by_id: HashMap<_, _> =
             boxes.iter().map(|tracked| (tracked.id, *tracked)).collect();
-        let isolating = self
-            .marks
+        let isolating = showing
             .iter()
             .any(|mark| mark.style == MarkStyle::Isolate);
         if boxes.is_empty() && !isolating {
@@ -240,8 +259,7 @@ impl FootballJob {
         // Each mark's thing at this instant, with its silhouette: read once,
         // since a spotlight wants them all at once.
         let mut silhouettes = HashMap::new();
-        let found: Vec<_> = self
-            .marks
+        let found: Vec<_> = showing
             .iter()
             .map(|mark| {
                 let tracked = boxes_by_id.get(&mark.track).copied();

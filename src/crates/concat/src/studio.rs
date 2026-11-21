@@ -7189,6 +7189,12 @@ impl Studio {
             None => {
                 let mut mark = model::FootballMark::new(tracked.id, style);
                 mark.colour = Self::MARK_COLOURS[self.analysis_colour];
+                // From where it was put on: a mark placed halfway through
+                // a clip starts there, and the inspector sets where it ends.
+                let local = f64::from(self.playhead) - clip.start;
+                if local > 0.1 && local < clip.duration - 0.1 {
+                    mark.from = Some(local);
+                }
                 marks.push(mark);
             }
         }
@@ -10965,6 +10971,43 @@ Veredicto del modelo de juego: {} — {}",
             return;
         };
         let value = f64::from(value);
+        // 10 starts the chosen player's marks at the playhead, 11 ends them
+        // there, 12 gives them the whole clip again.
+        let local = (f64::from(self.playhead) - clip.start).clamp(0.0, clip.duration);
+        if (10..=12).contains(&which) {
+            let marks: Vec<model::FootballMark> = clip
+                .football
+                .iter()
+                .cloned()
+                .map(|mut mark| {
+                    if mark.track == track {
+                        match which {
+                            10 => {
+                                mark.from = (local > 0.05).then_some(local);
+                                if mark.to.is_some_and(|to| to <= local + 0.1) {
+                                    mark.to = None;
+                                }
+                            }
+                            11 => {
+                                mark.to = (local < clip.duration - 0.05).then_some(local);
+                                if mark.from.is_some_and(|from| from >= local - 0.1) {
+                                    mark.from = None;
+                                }
+                            }
+                            _ => {
+                                mark.from = None;
+                                mark.to = None;
+                            }
+                        }
+                    }
+                    mark
+                })
+                .collect();
+            if marks != clip.football {
+                self.apply(Command::SetClipFootball { clip_id: id, marks });
+            }
+            return;
+        }
         let marks: Vec<model::FootballMark> = clip
             .football
             .iter()
@@ -14598,6 +14641,19 @@ Veredicto del modelo de juego: {} — {}",
             football_thickness: self.football_knob(clip, |mark| mark.thickness),
             football_squash: self.football_knob(clip, |mark| mark.squash),
             football_width: self.football_knob(clip, |mark| mark.width),
+            football_span: self
+                .football_chosen
+                .and_then(|track| clip.football.iter().find(|mark| mark.track == track))
+                .map(|mark| {
+                    let clock = |seconds: f64| format!("{}:{:04.1}", (seconds / 60.0) as u32, seconds % 60.0);
+                    format!(
+                        "{} – {}",
+                        clock(mark.from.unwrap_or(0.0)),
+                        clock(mark.to.unwrap_or(clip.duration))
+                    )
+                })
+                .unwrap_or_default()
+                .into(),
             football_strength: self
                 .football_chosen
                 .and_then(|track| clip.football.iter().find(|mark| mark.track == track))

@@ -507,6 +507,13 @@ pub struct FootballMark {
     /// length: the ring's, the pool's, the frame's and the arrow's width.
     #[serde(default = "one", skip_serializing_if = "is_one")]
     pub width: f64,
+    /// When the mark comes on, in seconds into its clip; `None` is from
+    /// the clip's first frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<f64>,
+    /// When it goes off, in seconds into its clip; `None` is to the end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<f64>,
 }
 
 fn one() -> f64 {
@@ -576,7 +583,19 @@ impl FootballMark {
             thickness: 1.0,
             squash: 1.0,
             width: 1.0,
+            from: None,
+            to: None,
         }
+    }
+
+    /// How much of the mark shows `local` seconds into its clip: nothing
+    /// outside its stretch, all of it inside, and a quarter second's fade
+    /// at either edge so it does not blink on and off.
+    pub fn shown_at(&self, local: f64) -> f64 {
+        const FADE: f64 = 0.25;
+        let after = self.from.map_or(f64::INFINITY, |from| (local - from) / FADE);
+        let before = self.to.map_or(f64::INFINITY, |to| (to - local) / FADE);
+        after.min(before).clamp(0.0, 1.0)
     }
 
     /// The strength and the shape held to their ranges.

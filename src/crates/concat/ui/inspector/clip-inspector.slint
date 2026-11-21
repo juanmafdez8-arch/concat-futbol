@@ -1703,6 +1703,37 @@ export component VideoPanel inherits VerticalLayout {
                 changed(v) => { root.football-param(3, v); }
             }
 
+            // When the chosen player's marks show: from the playhead, to
+            // the playhead, or the whole clip.
+            if root.selected.football-analysed && root.selected.football-marks-here > 0: Row {
+                label: "Duración";
+                Text {
+                    text: root.selected.football-span;
+                    color: Theme.fg-muted;
+                    font-size: Theme.fs-sm;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+            }
+            if root.selected.football-analysed && root.selected.football-marks-here > 0: HorizontalLayout {
+                spacing: 6px;
+                padding-left: Theme.pad;
+                padding-right: Theme.pad;
+                Button {
+                    label: "Empieza aquí";
+                    clicked => { root.football-param(10, 0); }
+                }
+                Button {
+                    label: "Termina aquí";
+                    clicked => { root.football-param(11, 0); }
+                }
+                Button {
+                    label: "Todo el clip";
+                    ghost: true;
+                    clicked => { root.football-param(12, 0); }
+                }
+            }
+
             if root.selected.football-analysed && root.selected.football-chosen >= 0: Row {
                 label: I18n.t("football.colour");
                 Rectangle {
