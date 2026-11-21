@@ -75,6 +75,67 @@ fn merged(mut ranges: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
     out
 }
 
+/// How far into the analysis kept either side of a hole the hole is read,
+/// in seconds, so the tracks crossing its edges are matched to their ids.
+const OVERLAP: f64 = 1.0;
+
+/// The parts of `spans`, in seconds, that `set` has no instants for: any
+/// stretch longer than [`GAP_MS`] without one, edges included - the same
+/// test [`FootballRequest::analysed`] passes.
+fn missing(set: &TrackSet, spans: &[(f64, f64)]) -> Vec<(f64, f64)> {
+    let mut holes = Vec::new();
+    for &(a, b) in spans {
+        let (from, to) = ((a.max(0.0) * 1000.0) as u64, (b.max(0.0) * 1000.0) as u64);
+        let lo = set.samples.partition_point(|sample| sample.ms < from);
+        let hi = set.samples.partition_point(|sample| sample.ms <= to);
+        let mut last = from;
+        let mut first = true;
+        for sample in &set.samples[lo..hi] {
+            if sample.ms.saturating_sub(last) > GAP_MS {
+                // From the edge itself, or from just after the last instant.
+                let start = if first { last } else { last + STEP_MS };
+                holes.push((start as f64 / 1000.0, sample.ms as f64 / 1000.0));
+            }
+            last = sample.ms;
+            first = false;
+        }
+        if to.saturating_sub(last) > GAP_MS {
+            let start = if first { last } else { last + STEP_MS };
+            holes.push((start as f64 / 1000.0, to as f64 / 1000.0));
+        }
+    }
+    merged(holes)
+}
+
+/// A fresh stretch's teams numbered as the analysis it joins numbers them:
+/// k-means calls either kit the first, so the one nearer the first kit
+/// kept is made team 1. The kits kept stay the analysis's own.
+fn align_teams(
+    samples: &mut [concat_vision::football::Sample],
+    kits: Vec<[u8; 3]>,
+    old: &[[u8; 3]],
+) -> Vec<[u8; 3]> {
+    if old.len() != 2 {
+        return kits;
+    }
+    if kits.len() != 2 {
+        return old.to_vec();
+    }
+    let d = |a: [u8; 3], b: [u8; 3]| -> i32 {
+        (0..3).map(|i| (i32::from(a[i]) - i32::from(b[i])).pow(2)).sum()
+    };
+    if d(kits[0], old[1]) + d(kits[1], old[0]) < d(kits[0], old[0]) + d(kits[1], old[1]) {
+        for tracked in samples.iter_mut().flat_map(|sample| sample.boxes.iter_mut()) {
+            tracked.team = match tracked.team {
+                1 => 2,
+                2 => 1,
+                other => other,
+            };
+        }
+    }
+    old.to_vec()
+}
+
 /// One analysed instant's detections.
 type Detections = (u64, Vec<concat_vision::football::Detection>);
 /// Each outfield player's box and shirt colour at one instant.
@@ -371,9 +432,57 @@ impl Footballs {
         }
         // The stretches themselves, joined where they touch: not everything
         // from the first to the last.
-        let spans = merged(request.ranges.clone());
         let dir = request.dir();
         let before = TrackSet::load(&dir);
+        // An analysis by the same models is built on rather than redone:
+        // only the stretches it has no instants for are detected, and the
+        // rest of it - other clips' stretches too - is kept as it was. A
+        // match cut into clips was analysed whole again for every new one.
+        let base = before
+            .as_ref()
+            .filter(|set| set.model == detectors.name() && !set.samples.is_empty());
+        let (spans, inner) = match base {
+            Some(set) => {
+                let holes = missing(set, &merged(request.ranges.clone()));
+                if holes.is_empty() {
+                    progress(Progress::Analysing(1.0));
+                    return Ok(0);
+                }
+                // Each hole is read a little into the analysis either side,
+                // so the tracks crossing its edges keep their ids.
+                let read = merged(
+                    holes
+                        .iter()
+                        .map(|&(a, b)| ((a - OVERLAP).max(0.0), b + OVERLAP))
+                        .collect(),
+                );
+                (read, Some(holes))
+            }
+            None => (merged(request.ranges.clone()), None),
+        };
+        // The fresh samples laid into the analysis kept: inside the holes
+        // they are the analysis, outside them the old instants stay.
+        let splice = |fresh: Vec<concat_vision::football::Sample>| match (base, &inner) {
+            (Some(set), Some(holes)) => {
+                let inside = |ms: u64| {
+                    holes.iter().any(|&(a, b)| {
+                        (a * 1000.0) as u64 <= ms && ms <= (b * 1000.0).ceil() as u64
+                    })
+                };
+                let mut out: Vec<_> = set
+                    .samples
+                    .iter()
+                    .filter(|sample| !inside(sample.ms))
+                    .cloned()
+                    .chain(fresh.into_iter().filter(|sample| inside(sample.ms)))
+                    .collect();
+                out.sort_by_key(|sample| sample.ms);
+                out.dedup_by_key(|sample| sample.ms);
+                out
+            }
+            _ => fresh,
+        };
+        let old_kits: Vec<[u8; 3]> = base.map(|set| set.team_colours.clone()).unwrap_or_default();
         let (width, height) = request.media_size;
         let (w, h) = detectors.input_size(width.max(1), height.max(1));
         let aspect = if height > 0 {
@@ -420,6 +529,8 @@ impl Footballs {
                 track::keep_ids(&before.samples, &mut samples);
             }
             let kits = label_teams(&mut samples, &shirts);
+            let kits = align_teams(&mut samples, kits, &old_kits);
+            let samples = splice(samples);
             save(samples.clone(), kits)?;
             first_ids = Some(samples);
             on_window();
@@ -456,10 +567,12 @@ impl Footballs {
             track::keep_ids(earlier, &mut samples);
         }
         let kits = label_teams(&mut samples, &shirts);
-        save(samples, kits)?;
+        let kits = align_teams(&mut samples, kits, &old_kits);
+        save(splice(samples), kits)?;
         // Only once the new analysis is safely written: the old silhouettes
-        // were read inside the old boxes, and are read again on demand.
-        if before.is_some() {
+        // were read inside the old boxes, and are read again on demand. An
+        // analysis built on kept its boxes, and its silhouettes with them.
+        if before.is_some() && base.is_none() {
             let _ = std::fs::remove_dir_all(dir.join("masks"));
         }
         progress(Progress::Analysing(1.0));
