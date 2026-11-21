@@ -98,7 +98,54 @@ pub(crate) struct FootballJob {
     /// The camera's motion through the analysis, measured once.
     motion: OnceLock<Arc<pitch::Motion>>,
     /// Which track picks each broken one up, worked out once.
-    successors: OnceLock<HashMap<u32, u32>>,
+    successors: OnceLock<Arc<HashMap<u32, u32>>>,
+}
+
+/// What is worked out from an analysis as a whole - the camera's motion,
+/// which track picks each broken one up - kept for the process rather
+/// than for one job, since every edit builds the jobs anew and measuring
+/// a whole match again stalled playback for a second and more.
+#[derive(Default)]
+struct Derived {
+    motion: OnceLock<Arc<pitch::Motion>>,
+    successors: OnceLock<Arc<HashMap<u32, u32>>>,
+}
+
+/// An analysis told apart from a fresher one of the same folder: the
+/// shared set is one allocation while its file is unchanged, and a new
+/// analysis has other instants in it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Identity {
+    address: usize,
+    samples: usize,
+    last_ms: u64,
+}
+
+fn identity(set: &TrackSet) -> Identity {
+    Identity {
+        address: set as *const TrackSet as usize,
+        samples: set.samples.len(),
+        last_ms: set.samples.last().map_or(0, |sample| sample.ms),
+    }
+}
+
+/// The derived values of `set`, the analysis in folder `dir`, shared by
+/// every job that draws from it.
+fn derived(dir: &Path, set: &TrackSet) -> Arc<Derived> {
+    type Cache = Mutex<HashMap<PathBuf, (Identity, Arc<Derived>)>>;
+    static CACHE: OnceLock<Cache> = OnceLock::new();
+    let wanted = identity(set);
+    let Ok(mut cache) = CACHE.get_or_init(|| Mutex::new(HashMap::new())).lock() else {
+        return Arc::new(Derived::default());
+    };
+    match cache.get(dir) {
+        Some((known, derived)) if *known == wanted => Arc::clone(derived),
+        _ => {
+            let fresh = Arc::new(Derived::default());
+            cache.insert(dir.to_path_buf(), (wanted, Arc::clone(&fresh)));
+            fresh
+        }
+    }
 }
 
 impl FootballJob {
@@ -254,7 +301,13 @@ impl FootballJob {
             boxes.iter().map(|tracked| (tracked.id, *tracked)).collect();
         // A marked player out of her track here may be in the one that
         // picked her up: followed along the chain, a few links at most.
-        let successors = self.successors.get_or_init(|| set.successors());
+        let successors = self.successors.get_or_init(|| {
+            Arc::clone(
+                derived(&self.dir, set)
+                    .successors
+                    .get_or_init(|| Arc::new(set.successors())),
+            )
+        });
         let showing: Vec<FootballMark> = showing
             .iter()
             .map(|mark| {
@@ -402,7 +455,14 @@ impl FootballJob {
     /// The camera's motion through `set`, measured the first time a mark
     /// asks for it.
     fn motion(&self, set: &TrackSet) -> Arc<pitch::Motion> {
-        Arc::clone(self.motion.get_or_init(|| Arc::new(pitch::Motion::of(set))))
+        let motion = self.motion.get_or_init(|| {
+            Arc::clone(
+                derived(&self.dir, set)
+                    .motion
+                    .get_or_init(|| Arc::new(pitch::Motion::of(set))),
+            )
+        });
+        Arc::clone(motion)
     }
 
     /// The picture to pitch metres at `ms`, when the clip is calibrated.
@@ -457,9 +517,8 @@ impl FootballJob {
         let back = (TRAIL_MS * mark.size.max(0.25)) as u64;
         let motion = self.motion(set);
         let mut points: Vec<(f32, f32)> = set
-            .instants_of(mark.track)
+            .instants_between(mark.track, now.saturating_sub(back), now)
             .into_iter()
-            .filter(|(ms, _)| *ms + back >= now && *ms < now)
             .map(|(ms, then)| {
                 let feet = pitch::feet(&then.bbox);
                 let (u, v) = motion.carry(feet, ms, now).unwrap_or(feet);
@@ -544,9 +603,9 @@ impl FootballJob {
     ) {
         let now = (seconds * 1000.0).max(0.0) as u64;
         let Some(earlier) = set
-            .instants_of(mark.track)
+            .instants_between(mark.track, now.saturating_sub(1000), now.saturating_sub(250))
             .into_iter()
-            .find(|(ms, _)| *ms + 1000 >= now && *ms + 250 < now)
+            .next()
         else {
             return;
         };

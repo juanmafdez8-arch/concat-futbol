@@ -451,6 +451,24 @@ impl TrackSet {
             .collect()
     }
 
+    /// Track `id` at each analysed instant from `from_ms` up to, not
+    /// including, `to_ms`: found by halving rather than by reading the
+    /// whole match, since a frame asks for it.
+    pub fn instants_between(&self, id: u32, from_ms: u64, to_ms: u64) -> Vec<(u64, TrackedBox)> {
+        let start = self.samples.partition_point(|sample| sample.ms < from_ms);
+        self.samples[start..]
+            .iter()
+            .take_while(|sample| sample.ms < to_ms)
+            .filter_map(|sample| {
+                sample
+                    .boxes
+                    .iter()
+                    .find(|tracked| tracked.id == id)
+                    .map(|tracked| (sample.ms, *tracked))
+            })
+            .collect()
+    }
+
     /// Reads `tracks.json` from a media's football folder; `None` when it
     /// is not analysed yet or the file cannot be read.
     pub fn load(dir: &Path) -> Option<TrackSet> {
@@ -470,7 +488,17 @@ impl TrackSet {
             .map_err(|error| format!("could not write {}: {error}", partial.display()))?;
         std::fs::rename(&partial, &file)
             .map_err(|error| format!("could not write {}: {error}", file.display()))?;
-        forget(dir);
+        // The set just written is the one every reader wants next: kept,
+        // rather than read back - a whole match is tens of megabytes of
+        // text, and the analysis writes it again after each stretch.
+        match std::fs::metadata(&file).and_then(|meta| meta.modified()) {
+            Ok(modified) => {
+                if let Ok(mut cache) = cache().lock() {
+                    cache.insert(dir.to_path_buf(), (modified, Arc::new(self.clone())));
+                }
+            }
+            Err(_) => forget(dir),
+        }
         Ok(())
     }
 }
