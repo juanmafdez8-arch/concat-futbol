@@ -49,6 +49,10 @@ const STEP_MS: u64 = 200;
 const WINDOW_BEFORE: f64 = 4.0;
 const WINDOW_AFTER: f64 = 16.0;
 
+/// A clip longer than this, in seconds, is the match rather than a moment
+/// of it: only its tagged plays are analysed.
+const LONG_CLIP: f64 = 180.0;
+
 /// How much before and after a tagged play is analysed with it, in seconds.
 const PLAY_BEFORE: f64 = 5.0;
 const PLAY_AFTER: f64 = 3.0;
@@ -192,6 +196,18 @@ impl FootballRequest {
                     })
                 })
             })
+            .collect();
+        // Plays only stand in for clips long enough to be the match itself:
+        // a clip cut down to a moment is analysed whole, or a mark put on
+        // it between its plays found nobody there and went blank.
+        let plays: Vec<(f64, f64)> = plays
+            .into_iter()
+            .chain(
+                whole
+                    .iter()
+                    .copied()
+                    .filter(|(a, b)| b - a <= LONG_CLIP),
+            )
             .collect();
         let ranges = merged(if plays.is_empty() { whole } else { plays });
         Some(FootballRequest {
