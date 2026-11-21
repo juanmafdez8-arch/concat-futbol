@@ -131,6 +131,26 @@ impl Strip {
 }
 
 /// The key a cell's strip is held under: the media and the cell.
+/// Reads the football analyses of a project's media into the shared cache
+/// on a thread of its own, so the first mark or frame drawn does not wait
+/// on a whole match's tracks being read - tens of megabytes of text.
+fn warm_football(project: &std::path::Path, media: Vec<String>) {
+    let project = project.to_path_buf();
+    let spawned = std::thread::Builder::new()
+        .name("football-warm".into())
+        .spawn(move || {
+            for path in media {
+                let dir = concat_vision::football::football_dir(&project, &path);
+                if concat_vision::football::tracks_file(&dir).is_file() {
+                    let _ = concat_vision::football::shared(&dir);
+                }
+            }
+        });
+    if let Err(error) = spawned {
+        log::warn!("football: could not read the analyses ahead: {error}");
+    }
+}
+
 fn window_key(media_id: &str, level: u32, cell: u32) -> String {
     format!("{media_id}|{level}|{cell}")
 }
@@ -12601,6 +12621,10 @@ Veredicto del modelo de juego: {} — {}",
                 if swept > 0 {
                     log::info!("{swept} stale proxies swept from {}", project_dir.display());
                 }
+                warm_football(
+                    project_dir,
+                    session.project().media.iter().map(|item| item.path.clone()).collect(),
+                );
                 self.session = Some(session);
                 crate::host::next_project_epoch();
                 self.forget_art();
