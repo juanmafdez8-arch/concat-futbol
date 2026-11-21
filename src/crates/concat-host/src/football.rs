@@ -127,9 +127,24 @@ impl FootballRequest {
         football_dir(&self.project, &self.media_path)
     }
 
-    /// Whether the media has been analysed.
+    /// Whether the media has been analysed over every stretch asked for.
+    /// A file alone was not enough: an analysis stopped after its first
+    /// window, or made before the clips were cut elsewhere in the match,
+    /// left tracks that did not reach the clips, and the player tools then
+    /// found nobody and never asked for the rest.
     pub fn analysed(&self) -> bool {
-        tracks_file(&self.dir()).is_file()
+        let Some(set) = concat_vision::football::shared(&self.dir()) else {
+            return false;
+        };
+        merged(self.ranges.clone()).iter().all(|&(a, b)| {
+            let (from, to) = ((a.max(0.0) * 1000.0) as u64, (b.max(0.0) * 1000.0) as u64);
+            let expected = (to.saturating_sub(from) / STEP_MS).max(1) as usize;
+            let lo = set.samples.partition_point(|sample| sample.ms < from);
+            let hi = set.samples.partition_point(|sample| sample.ms <= to);
+            // Half the instants is covered: a frame the decoder skipped
+            // or a stretch of empty picture is not a gap to analyse again.
+            (hi - lo) * 2 >= expected
+        })
     }
 
     /// The analysis for the clip `clip_id` of `project`, if it shows a
