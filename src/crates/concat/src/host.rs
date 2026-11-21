@@ -73,10 +73,15 @@ impl Host {
         Ok(Host {
             titles: concat_host::Titles::new(&dirs),
             cutouts: Arc::new(concat_host::Cutouts::new(&dirs.data)),
-            footballs: Arc::new(concat_host::Footballs::new(
-                &dirs.data,
-                Arc::clone(&brushes),
-            )),
+            footballs: {
+                let footballs = Arc::new(concat_host::Footballs::new(
+                    &dirs.data,
+                    Arc::clone(&brushes),
+                ));
+                // Ready before the first player is picked.
+                footballs.warm();
+                footballs
+            },
             brushes,
             enhancers: Arc::new(concat_host::Enhancers::new(&dirs.data)),
             reversers: Arc::new(concat_host::Reversers::new()),

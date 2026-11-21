@@ -46,8 +46,8 @@ const READ_WIDTH: u32 = 1920;
 const STEP_MS: u64 = 200;
 /// The window analysed first round the instant being looked at, before
 /// and after it, in seconds.
-const WINDOW_BEFORE: f64 = 4.0;
-const WINDOW_AFTER: f64 = 16.0;
+const WINDOW_BEFORE: f64 = 2.0;
+const WINDOW_AFTER: f64 = 8.0;
 
 /// A clip longer than this, in seconds, is the match rather than a moment
 /// of it: only its tagged plays are analysed.
@@ -259,6 +259,26 @@ impl Footballs {
     }
 
     /// Whether the football detector is on disk.
+    /// Loads both copies of the models on a thread of their own, so the
+    /// first player picked does not wait for them: loading and compiling
+    /// them for the GPU took seconds the first mark sat through.
+    pub fn warm(self: &Arc<Self>) {
+        if !self.installed() {
+            return;
+        }
+        let me = Arc::clone(self);
+        std::thread::Builder::new()
+            .name("football-warm".into())
+            .spawn(move || {
+                let started = std::time::Instant::now();
+                if me.detectors().is_ok() {
+                    me.spare_detectors();
+                }
+                log::info!("football: models ready in {:.1}s", started.elapsed().as_secs_f32());
+            })
+            .ok();
+    }
+
     pub fn installed(&self) -> bool {
         Self::models_dir(&self.data).join("football.onnx").is_file()
     }
