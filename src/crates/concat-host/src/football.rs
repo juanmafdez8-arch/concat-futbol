@@ -53,6 +53,9 @@ const WINDOW_AFTER: f64 = 16.0;
 /// of it: only its tagged plays are analysed.
 const LONG_CLIP: f64 = 180.0;
 
+/// The longest hole in an analysis that still counts as covered, in ms.
+const GAP_MS: u64 = 1500;
+
 /// How much before and after a tagged play is analysed with it, in seconds.
 const PLAY_BEFORE: f64 = 5.0;
 const PLAY_AFTER: f64 = 3.0;
@@ -142,12 +145,19 @@ impl FootballRequest {
         };
         merged(self.ranges.clone()).iter().all(|&(a, b)| {
             let (from, to) = ((a.max(0.0) * 1000.0) as u64, (b.max(0.0) * 1000.0) as u64);
-            let expected = (to.saturating_sub(from) / STEP_MS).max(1) as usize;
             let lo = set.samples.partition_point(|sample| sample.ms < from);
             let hi = set.samples.partition_point(|sample| sample.ms <= to);
-            // Half the instants is covered: a frame the decoder skipped
-            // or a stretch of empty picture is not a gap to analyse again.
-            (hi - lo) * 2 >= expected
+            // Covered is no hole longer than a second and a half anywhere
+            // in it, edges included: a count let a stretch half analysed
+            // pass, and the middle of a clip stayed empty.
+            let mut last = from;
+            for sample in &set.samples[lo..hi] {
+                if sample.ms.saturating_sub(last) > GAP_MS {
+                    return false;
+                }
+                last = sample.ms;
+            }
+            to.saturating_sub(last) <= GAP_MS
         })
     }
 

@@ -310,6 +310,78 @@ impl TrackSet {
         }
     }
 
+    /// Where each track that breaks off is picked up: the track that starts
+    /// soon after it ends, near where it was, of the same kind and team.
+    /// A broadcast loses a player behind another or at a cut, and the
+    /// tracker gives her a new id when she is found again; a mark on her
+    /// follows on through these instead of stopping or staying behind.
+    pub fn successors(&self) -> HashMap<u32, u32> {
+        const WITHIN_MS: u64 = 2000;
+        struct Life {
+            first: (u64, [f32; 4]),
+            last: (u64, [f32; 4]),
+            kind: Kind,
+            team: u8,
+        }
+        let mut lives: HashMap<u32, Life> = HashMap::new();
+        for sample in &self.samples {
+            for tracked in &sample.boxes {
+                if tracked.id == BALL {
+                    continue;
+                }
+                lives
+                    .entry(tracked.id)
+                    .and_modify(|life| {
+                        life.last = (sample.ms, tracked.bbox);
+                        if life.team == 0 {
+                            life.team = tracked.team;
+                        }
+                    })
+                    .or_insert(Life {
+                        first: (sample.ms, tracked.bbox),
+                        last: (sample.ms, tracked.bbox),
+                        kind: tracked.kind,
+                        team: tracked.team,
+                    });
+            }
+        }
+        let centre = |b: &[f32; 4]| ((b[0] + b[2]) * 0.5, b[3]);
+        let mut out = HashMap::new();
+        let mut taken = std::collections::HashSet::new();
+        let mut ending: Vec<(&u32, &Life)> = lives.iter().collect();
+        ending.sort_by_key(|(_, life)| life.last.0);
+        for (id, life) in ending {
+            let (ex, ey) = centre(&life.last.1);
+            let height = (life.last.1[3] - life.last.1[1]).max(0.02);
+            let best = lives
+                .iter()
+                .filter(|(other, next)| {
+                    *other != id
+                        && !taken.contains(*other)
+                        && next.kind == life.kind
+                        && (next.team == life.team || next.team == 0 || life.team == 0)
+                        && next.first.0 > life.last.0
+                        && next.first.0 - life.last.0 <= WITHIN_MS
+                })
+                .map(|(other, next)| {
+                    let (nx, ny) = centre(&next.first.1);
+                    let gap_s = (next.first.0 - life.last.0) as f32 / 1000.0;
+                    // How far a player runs in the gap, in her own heights:
+                    // a few, and a couple more the longer she was gone.
+                    let reach = height * (1.5 + 3.0 * gap_s);
+                    let far = ((nx - ex) * self.aspect).hypot(ny - ey);
+                    (far / reach, *other)
+                })
+                .filter(|(ratio, _)| *ratio <= 1.0)
+                .min_by(|a, b| a.0.total_cmp(&b.0));
+            if let Some((_, next)) = best {
+                taken.insert(next);
+                out.insert(*id, next);
+            }
+        }
+        out
+    }
+
     /// Track `id` at `seconds`, if it is in view there.
     pub fn track_at(&self, id: u32, seconds: f64) -> Option<TrackedBox> {
         self.at(seconds)
@@ -752,6 +824,15 @@ mod tests {
 
     fn boxes_one(id: u32) -> TrackedBox {
         boxed(id, 1, 0.30)
+    }
+
+    #[test]
+    fn a_lost_track_is_picked_up_by_the_one_that_starts_beside_it() {
+        let next = handed_on().successors();
+        assert_eq!(next.get(&3), Some(&7));
+        assert_eq!(next.get(&7), Some(&9), "a chain");
+        assert!(next.values().all(|id| *id != 8), "too far");
+        assert!(next.get(&9).is_none(), "too late for 11");
     }
 
     #[test]

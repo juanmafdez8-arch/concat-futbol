@@ -97,6 +97,8 @@ pub(crate) struct FootballJob {
     calibration: pitch::Calibration,
     /// The camera's motion through the analysis, measured once.
     motion: OnceLock<Arc<pitch::Motion>>,
+    /// Which track picks each broken one up, worked out once.
+    successors: OnceLock<HashMap<u32, u32>>,
 }
 
 impl FootballJob {
@@ -136,6 +138,7 @@ impl FootballJob {
             silhouettes,
             calibration: pitch::Calibration::load(&dir),
             motion: OnceLock::new(),
+            successors: OnceLock::new(),
             dir,
         })
     }
@@ -249,6 +252,25 @@ impl FootballJob {
         let boxes = set.at(seconds);
         let boxes_by_id: HashMap<_, _> =
             boxes.iter().map(|tracked| (tracked.id, *tracked)).collect();
+        // A marked player out of her track here may be in the one that
+        // picked her up: followed along the chain, a few links at most.
+        let successors = self.successors.get_or_init(|| set.successors());
+        let showing: Vec<FootballMark> = showing
+            .iter()
+            .map(|mark| {
+                let mut mark = mark.clone();
+                let mut hops = 0;
+                while !boxes_by_id.contains_key(&mark.track) && hops < 12 {
+                    match successors.get(&mark.track) {
+                        Some(next) => mark.track = *next,
+                        None => break,
+                    }
+                    hops += 1;
+                }
+                mark
+            })
+            .collect();
+        let showing = showing.as_slice();
         let isolating = showing
             .iter()
             .any(|mark| mark.style == MarkStyle::Isolate);
